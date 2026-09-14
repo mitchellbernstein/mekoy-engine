@@ -10,7 +10,9 @@ from mekoy.errors import CompileError
 from mekoy.outcome import RestaurantOutcome
 from mekoy.reflect import (
     Candidate,
+    _grouped,
     diagnose_prompt,
+    failure_shape,
     pareto,
     parse_reply,
     reflect,
@@ -91,6 +93,89 @@ def test_parse_reply_reads_the_requested_shape() -> None:
     instruction, diagnosis = parse_reply(text, fallback="KEEP")
     assert instruction == "Rewrite it and be careful."
     assert diagnosis == "confuses a time with a headcount."
+
+
+def test_parse_reply_reads_a_label_with_its_body_on_the_following_lines() -> None:
+    """The shape that silently discarded every rewrite.
+
+    Models usually put `DIAGNOSIS:` on its own line and the content underneath. Reading
+    only what follows the colon on the label's own line returned an empty string, so
+    both fields were dropped and the loop concluded the task could not be diagnosed.
+    """
+    text = (
+        "DIAGNOSIS: \n"
+        "- Confuses a transfer charge with a top-up limit.\n"
+        "- Reads a completed top-up as still pending.\n"
+        "\n"
+        "INSTRUCTION:\n"
+        "- A transfer charge is not a top-up limit.\n"
+        "- A completed top-up is never pending.\n"
+    )
+    instruction, diagnosis = parse_reply(text, fallback="KEEP")
+    assert "A transfer charge is not a top-up limit." in instruction
+    assert "A completed top-up is never pending." in instruction
+    assert diagnosis is not None
+    assert "Confuses a transfer charge" in diagnosis
+    assert instruction != "KEEP"
+
+
+def test_parse_reply_reads_a_json_answer() -> None:
+    """Small local models answer the two-field shape as JSON about half the time.
+
+    Read as prose, a JSON reply made the *entire blob* the next instruction, so the
+    child scored no better and the loop reported "no improvement" — a parsing failure
+    dressed up as a property of the task.
+    """
+    text = (
+        '{"DIAGNOSIS": "Names the wrong field.", '
+        '"INSTRUCTION": "Always read the time before the headcount."}'
+    )
+    instruction, diagnosis = parse_reply(text, fallback="KEEP")
+    assert instruction == "Always read the time before the headcount."
+    assert diagnosis == "Names the wrong field."
+
+
+def test_a_json_blob_never_becomes_the_next_instruction() -> None:
+    """A failed parse must keep the parent, not adopt the raw reply."""
+    blob = '{"unrelated": "' + ("x" * 200) + '"}'
+    instruction, _ = parse_reply(blob, fallback="KEEP")
+    assert instruction == "KEEP"
+
+
+def test_failure_shape_separates_a_rule_gap_from_a_knowledge_gap() -> None:
+    """Scattered mistakes cannot be instructed away; repeated ones can.
+
+    Nine unique mistakes in nine cases is what BANKING77 actually produced, and four
+    rewritten instructions moved it by zero. Saying so beats spending the budget.
+    """
+    scattered = [
+        ("t", f'{{"label":"{name}"}}', "wrong")
+        for name in ("a_b_c", "d_e_f", "g_h_i", "j_k_l", "m_n_o", "p_q_r")
+    ]
+    assert failure_shape(scattered).is_knowledge_gap
+    assert "knowledge gap" in failure_shape(scattered).explain()
+
+    repeated = [("t", '{"label":"booked_true"}', "wrong") for _ in range(6)]
+    assert not failure_shape(repeated).is_knowledge_gap
+    assert "rule gap" in failure_shape(repeated).explain()
+
+
+def test_failure_shape_is_not_called_on_too_few_cases() -> None:
+    """One unique failure is not evidence of anything."""
+    assert not failure_shape([("t", '{"label":"a_b"}', "wrong")]).is_knowledge_gap
+
+
+def test_related_labels_land_in_the_same_family() -> None:
+    """`verify_my_identity` and `why_verify_identity` are the same kind of mistake."""
+    failures = [
+        ("t", '{"label":"why_verify_identity"}', "wrong"),
+        ("t", '{"label":"verify_my_identity"}', "wrong"),
+        ("t", '{"label":"order_physical_card"}', "wrong"),
+        ("t", '{"label":"get_physical_card"}', "wrong"),
+    ]
+    grouped = _grouped(failures)
+    assert len(grouped) == 2
+    assert all(len(cases) == 2 for _, cases in grouped)
 
 
 def test_parse_reply_keeps_usable_work_from_a_prose_answer() -> None:

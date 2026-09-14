@@ -32,7 +32,9 @@ behaviour crowds out every alternative.
 
 from __future__ import annotations
 
+import json
 import random
+import re
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, cast
 
@@ -51,8 +53,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 __all__ = [
     "DEFAULT_METRIC_CALLS",
     "Candidate",
+    "FailureShape",
     "ReflectionResult",
     "diagnose_prompt",
+    "failure_shape",
     "pareto",
     "parse_reply",
     "reflect",
@@ -245,6 +249,168 @@ def should_stop(  # noqa: PLR0913 - it reports on several stop conditions
     return None
 
 
+#: Words that carry no signal about which mistakes are related. `label` and `value`
+#: appear in almost every serialised answer, so leaving them in would put every case
+#: in one family and teach nothing.
+#: Words shorter than this are too common to signal a family ("get", "pay", "why").
+#: Two characters and fewer matched too much.
+_MIN_SIGNAL_CHARS = 2
+
+_LABEL_STOPWORDS = frozenset(
+    {
+        "the",
+        "a",
+        "an",
+        "my",
+        "me",
+        "i",
+        "to",
+        "of",
+        "for",
+        "is",
+        "it",
+        "and",
+        "label",
+        "value",
+        "intent",
+        "outcome",
+        "receipt",
+        "status",
+        "restaurant",
+    }
+)
+
+
+#: Below this many failures the shape is too noisy to call; a single failure is always
+#: a family of one.
+_MIN_CASES_FOR_SHAPE = 5
+
+#: The share of failures that must sit in a shared family for the loop to believe an
+#: instruction can help. Below it, the loop reports a knowledge gap.
+_SHARED_SHAPE_MIN = 0.34
+
+
+def _signal_words(gold: object) -> frozenset[str]:
+    """The distinctive words in the label a wrong answer should have produced."""
+    words = re.findall(r"[a-z]+", _as_text(gold).lower())
+    return frozenset(
+        word
+        for word in words
+        if word not in _LABEL_STOPWORDS and len(word) > _MIN_SIGNAL_CHARS
+    )
+
+
+def _grouped(
+    failures: Sequence[tuple[str, object, str]],
+) -> list[tuple[str, list[tuple[str, object, str]]]]:
+    """Failures clustered by shared label words, largest family first.
+
+    Connected components, not exact-match buckets: `verify_my_identity` and
+    `why_verify_identity` never have identical word sets, so bucketing them by an
+    exact key puts every case in a family of one and the diagnosis has no family to
+    name. Two cases join when their labels share a distinctive word, which is the
+    relation that actually holds between confusing pairs.
+
+    Largest first: a family of three teaches a rule worth writing, a family of one is
+    a long tail an instruction should not chase.
+    """
+    words = [_signal_words(gold) for _, gold, _ in failures]
+    parent = list(range(len(failures)))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for left in range(len(failures)):
+        for right in range(left + 1, len(failures)):
+            if words[left] & words[right]:
+                parent[find(left)] = find(right)
+
+    families: dict[int, list[int]] = {}
+    for index in range(len(failures)):
+        families.setdefault(find(index), []).append(index)
+
+    def name(members: list[int]) -> str:
+        shared = (
+            set.intersection(*(set(words[i]) for i in members)) if members else set()
+        )
+        source = shared or (set(words[members[0]]) if members else set())
+        return "_".join(sorted(source)[:3]) or "other"
+
+    grouped = [(name(m), [failures[i] for i in m]) for m in families.values()]
+    return sorted(grouped, key=lambda item: (-len(item[1]), item[0]))
+
+
+@dataclass(frozen=True)
+class FailureShape:
+    """What a batch of failures looks like as a group.
+
+    The distinction this exists to draw: a **rule gap** fails the same way repeatedly
+    and can be fixed by rewriting the instruction; a **knowledge gap** fails a
+    different way every time and cannot be fixed by any instruction, because the model
+    does not know the thing it is being asked to choose between.
+
+    Measured, not assumed. On BANKING77 the compiled model scored 0.600 and made 9
+    mistakes across 9 distinct label pairs — every error unique. Four rewritten
+    instructions, including one that grouped related cases, moved the score by zero.
+    On the restaurant job the failures were the same mistake repeated (claimed a
+    booking the transcript never supports) and one rewritten instruction fixed it.
+    Sending both jobs to the same reflection loop wastes the user's evening on the
+    second, so the loop states which one it is looking at.
+    """
+
+    cases: int
+    families: int
+    largest: int
+
+    @property
+    def repeated(self) -> int:
+        """Cases belonging to a family with more than one member."""
+        return 0 if self.families == 0 else max(0, self.cases - self.families)
+
+    @property
+    def is_knowledge_gap(self) -> bool:
+        """True when almost no two failures fail alike.
+
+        The threshold is deliberately blunt. Nine unique mistakes in nine cases is not
+        a near miss; it is the shape of a task whose answers are not derivable from what
+        the model knows. Below this line a few shared rules still exist and the loop
+        runs as normal.
+        """
+        if self.cases < _MIN_CASES_FOR_SHAPE:
+            return False
+        return self.repeated / self.cases < _SHARED_SHAPE_MIN
+
+    def explain(self) -> str:
+        """One line naming the gap and the lever that actually moves it."""
+        if self.is_knowledge_gap:
+            return (
+                f"failures are unrelated ({self.families} different mistakes in "
+                f"{self.cases} cases), so this is a knowledge gap, not a rule gap. "
+                "Rewriting the instruction cannot help; show more examples, pick a "
+                "stronger model, or train on this task."
+            )
+        return (
+            f"failures repeat ({self.cases - self.families} of {self.cases} cases "
+            f"share a pattern across {self.families} families), so this is a rule gap "
+            "an instruction can close."
+        )
+
+
+def failure_shape(
+    failures: Sequence[tuple[str, object, str]],
+) -> FailureShape:
+    """Measure how alike a batch of failures is."""
+    grouped = _grouped(failures)
+    return FailureShape(
+        cases=len(failures),
+        families=len(grouped),
+        largest=max((len(cases) for _, cases in grouped), default=0),
+    )
+
+
 def diagnose_prompt(
     candidate: Candidate,
     failures: Sequence[tuple[str, object, str]],
@@ -254,25 +420,54 @@ def diagnose_prompt(
     Diagnosis before rewriting is deliberate: a model asked only for a new
     instruction rewrites prose, and a model asked what went wrong makes a claim we
     can read, keep, or discard.
+
+    Failures arrive grouped by family, and the ask is for however many mistakes the
+    cases actually show. Asking for *the single* shared mistake assumed a repeated
+    error, so on a task whose mistakes are all different the model would correctly
+    answer "none" and the loop would stop having learned nothing. Naming the families
+    gives it something true to say instead.
     """
+    shown = 0
     blocks: list[str] = []
-    for text, gold, produced in failures[:_MAX_EXAMPLES]:
-        blocks.append(
-            "CASE\n"
-            f"document: {text[:600]}\n"
-            f"correct answer: {_as_text(gold)}\n"
-            f"current output: {produced[:400]}"
-        )
+    related = 0
+    for family, cases in _grouped(failures):
+        del family
+        for text, gold, produced in cases:
+            if shown >= _MAX_EXAMPLES:
+                break
+            shown += 1
+            blocks.append(
+                "CASE\n"
+                f"document: {text[:600]}\n"
+                f"correct answer: {_as_text(gold)}\n"
+                f"current output: {produced[:400]}"
+            )
+        if len(cases) > 1:
+            related += 1
+        if shown >= _MAX_EXAMPLES:
+            break
     lessons = "\n".join(f"- {lesson}" for lesson in candidate.lessons) or "- none yet"
+    plural = (
+        "These cases do not all share one mistake. Name each distinct mistake you "
+        "can see, one per line; cases listed with a shared label word tend to fail "
+        "the same way."
+        if related
+        else "Name the mistake these cases share."
+    )
     return (
         f"{candidate.instructions}\n\n"
         "---\n"
-        "The instruction above produced wrong answers on these cases:\n\n"
-        f"{chr(10).join(blocks)}\n\n"
+        "The instruction above produced wrong answers on these cases, grouped so "
+        f"related mistakes sit together:\n\n{chr(10).join(blocks)}\n\n"
         f"Lessons already learned (do not lose these):\n{lessons}\n\n"
         "Reply in exactly this shape and nothing else:\n"
-        "DIAGNOSIS: one sentence naming the single mistake these cases share.\n"
-        "INSTRUCTION: the complete revised instruction.\n"
+        f"DIAGNOSIS: {plural}\n"
+        "INSTRUCTION: the complete revised instruction. Every rule must be a test "
+        "the model can apply to a document it has never seen. Never name a specific "
+        "case, answer, or label from the examples above, and never list what those "
+        "particular documents were. A rule that works only on the cases you were "
+        "shown is worthless, because the cases that decide the score are the ones "
+        "you were not shown.\n"
     )
 
 
@@ -281,21 +476,87 @@ def _as_text(value: object) -> str:
     return dump() if callable(dump) else str(value)
 
 
+def _from_json(reply: str) -> tuple[str, str | None] | None:
+    """Read a `{DIAGNOSIS, INSTRUCTION}` reply, or None if it is not one.
+
+    Models answer the requested two-field shape as JSON about half the time, whatever
+    the prompt says, and small local models do it more often than large ones. The
+    first version of this parser read only plain-text lines, so a JSON reply lost both
+    fields and the *entire reply* became the next instruction. Reflection then fed a
+    JSON blob back to itself, the child scored no better, and the loop stopped with
+    "no improvement" — which read as the task being undiagnosable rather than as a
+    parsing bug. Handling both shapes is what makes the rest of the loop real.
+    """
+    start, end = reply.find("{"), reply.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        loaded = json.loads(reply[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    folded = {str(key).strip().lower(): value for key, value in loaded.items()}
+    instruction = str(folded.get("instruction") or "").strip()
+    diagnosis = str(folded.get("diagnosis") or "").strip() or None
+    if not instruction and not diagnosis:
+        return None
+    return instruction, diagnosis
+
+
+#: The two labels the diagnosis step is asked for. A label may sit on its own line
+#: with the content underneath, which is how models usually answer.
+_REPLY_LABELS = ("DIAGNOSIS", "INSTRUCTION")
+
+
+def _sections(reply: str) -> dict[str, str]:
+    """Split a labelled reply into its sections, label line or label line plus body.
+
+    The first parser read only the text after the colon *on the label's own line*. When
+    the model wrote `DIAGNOSIS:` and then a bulleted list beneath it — the common
+    shape — the section read back empty, the diagnosis was dropped, and the loop
+    concluded the task was undiagnosable. Reading to the next label instead makes both
+    layouts work.
+    """
+    found: dict[str, str] = {}
+    current: str | None = None
+    buffer: list[str] = []
+
+    def flush() -> None:
+        if current is not None:
+            found[current] = "\n".join(buffer).strip()
+
+    for line in reply.splitlines():
+        stripped = line.strip()
+        upper = stripped.upper()
+        label = next(
+            (name for name in _REPLY_LABELS if upper.startswith(f"{name}:")), None
+        )
+        if label is not None:
+            flush()
+            current = label
+            buffer = [stripped[len(label) + 1 :].strip()]
+            continue
+        if current is not None:
+            buffer.append(line)
+    flush()
+    return {name: value for name, value in found.items() if value}
+
+
 def parse_reply(reply: str, *, fallback: str) -> tuple[str, str | None]:
     """Split a reply into (instruction, diagnosis).
 
-    A model that answers with prose instead of the requested shape keeps its
-    instruction and loses only the diagnosis; refusing the whole reply would throw
-    away usable work.
+    JSON is tried first because a JSON reply read as prose yields a blob, and a blob is
+    worse than no answer: it becomes the next instruction. A model that answers with
+    neither shape keeps its instruction and loses only the diagnosis; refusing the whole
+    reply would throw away usable work.
     """
-    diagnosis: str | None = None
-    instruction = ""
-    for line in reply.splitlines():
-        stripped = line.strip()
-        if stripped.upper().startswith("DIAGNOSIS:"):
-            diagnosis = stripped.partition(":")[2].strip() or None
-        elif stripped.upper().startswith("INSTRUCTION:"):
-            instruction = stripped.partition(":")[2].strip()
+    as_json = _from_json(reply)
+    if as_json is not None and as_json[0]:
+        return as_json
+    sections = _sections(reply)
+    instruction = sections.get("INSTRUCTION", "")
+    diagnosis = sections.get("DIAGNOSIS") or (as_json[1] if as_json else None)
     if not instruction:
         candidate = reply.strip()
         instruction = (
@@ -303,6 +564,8 @@ def parse_reply(reply: str, *, fallback: str) -> tuple[str, str | None]:
             if _MIN_INSTRUCTION_CHARS < len(candidate) <= _MAX_INSTRUCTION_CHARS
             else ""
         )
+    if "{" in instruction and instruction.rstrip().endswith("}"):
+        instruction = ""
     return (instruction or fallback), diagnosis
 
 
@@ -370,6 +633,7 @@ def reflect(  # noqa: PLR0913, PLR0915, C901 - the loop is the algorithm
     islands: int = DEFAULT_ISLANDS,
     target: float | None = None,
     seed: int = 0,
+    allow_knowledge_gap: bool = False,
 ) -> ReflectionResult:
     """Evolve the task's instruction against the task's own gate.
 
@@ -461,6 +725,16 @@ def reflect(  # noqa: PLR0913, PLR0915, C901 - the loop is the algorithm
                 break
             continue
         uninformative = 0
+
+        # Before spending a single reflection call, check whether these failures are
+        # the kind an instruction can fix. Repeat work is worth reflecting on; a fresh
+        # mistake in every case means the model does not know the answers, and no
+        # rewrite will teach it. Reporting that instead of grinding through the budget
+        # is the difference between a tool that helps and one that burns an evening.
+        shape = failure_shape(failures)
+        if shape.is_knowledge_gap and not allow_knowledge_gap:
+            stopped = shape.explain()
+            break
 
         reply = completer.complete(
             system=task.prompt,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import socket
 from collections.abc import Mapping
 
@@ -12,7 +13,12 @@ _LIMITS = httpx2.Limits(
     max_keepalive_connections=40,
     keepalive_expiry=30.0,
 )
-_TIMEOUT = httpx2.Timeout(connect=5.0, read=120.0, write=10.0, pool=10.0)
+#: A local model writing a long structured answer can take minutes. The old
+#: 120-second read timeout turned that into "model server unreachable", which reads
+#: as a connectivity problem when it is really a slow generation. Overridable
+#: because a fast dedicated box wants a short timeout and a laptop wants a long one.
+_READ_TIMEOUT_S = float(os.environ.get("MEKOY_READ_TIMEOUT_S", "600"))
+_TIMEOUT = httpx2.Timeout(connect=5.0, read=_READ_TIMEOUT_S, write=10.0, pool=10.0)
 _SOCKET_OPTIONS: list[tuple[int, int, int]] = [
     (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1),
 ]
