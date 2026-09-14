@@ -2,7 +2,9 @@
 
 This repo is an **AI System Compiler**. You compile owned **Systems** for one job. You do not build a generic coding agent, a document-AI company, or a GPU cloud.
 
-**Precedence:** [`PLAN.md`](PLAN.md) §0. If this file fights §0, §0 wins.
+**Precedence:** the engine contract in `src/mekoy/tasks.py` and the checks in
+`src/mekoy/verify.py` are the source of truth. If this file disagrees with the code,
+the code wins.
 
 ## Vocabulary
 

@@ -1,0 +1,95 @@
+{
+  "task": "extract restaurant call outcomes",
+  "schema": {
+    "description": "What staff actually confirmed. Not a booking agent.",
+    "properties": {
+      "restaurant": {
+        "title": "Restaurant",
+        "type": "string"
+      },
+      "intent": {
+        "enum": [
+          "availability",
+          "reservation"
+        ],
+        "title": "Intent",
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "confirmed",
+          "unknown",
+          "unavailable"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "party_size": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Party Size"
+      },
+      "when": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "When"
+      },
+      "under_name": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Under Name"
+      },
+      "evidence": {
+        "title": "Evidence",
+        "type": "string"
+      },
+      "booked": {
+        "title": "Booked",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "restaurant",
+      "intent",
+      "status",
+      "evidence",
+      "booked"
+    ],
+    "title": "RestaurantOutcome",
+    "type": "object"
+  },
+  "slos": {
+    "quality": 1.0,
+    "cost_per_doc": 0.0,
+    "latency_ms": 0.016520963981747627
+  },
+  "model_id": "qwen2.5:7b",
+  "k_shot": 0,
+  "retries": 1,
+  "ownership": {
+    "runtime_owned": true,
+    "downloadable": true
+  }
+}

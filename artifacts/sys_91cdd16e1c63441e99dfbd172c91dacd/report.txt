@@ -1,0 +1,9 @@
+winner  k=0 r=1 grammar default
+dev     quality=1.000 schema=1.000 n=2
+test    quality=1.000 strict=1.000 schema=1.000 n=2
+cost    $0.00000/doc  latency=0ms/doc
+trials  1 candidate(s), 0 pruned at the rung, stopped_on_slo=False
+compile cost: 0.0 min, 4 model calls, 1 candidate(s) tried, $0.00
+training: skipped
+arms:
+  k=0 r=1 grammar default      dev=1.000 schema=1.000 $0.00000 0ms
