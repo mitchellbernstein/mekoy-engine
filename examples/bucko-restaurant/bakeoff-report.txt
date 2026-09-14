@@ -1,0 +1,8 @@
+holdout n=54 (test, scored once)
+baseline   qwen2.5:7b             quality=0.905 strict=0.857 schema=1.000 $0.00000/doc 7564ms
+challenger qwen2.5:7b             quality=0.950 strict=0.894 schema=1.000 $0.00000/doc 7656ms
+speed      challenger slower
+compile    k=8 r=0 grammar default
+selection  selected on dev (n=54) from 1 candidate(s); test (n=54) scored once
+training: skipped
+verdict: CHALLENGER WINS (quality >= baseline, cheaper)

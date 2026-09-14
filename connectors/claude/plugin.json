@@ -1,0 +1,6 @@
+{
+  "name": "mekoy",
+  "version": "0.1.0",
+  "description": "Claude connector for compiling owned AI systems. Remote MCP plus a compile skill.",
+  "author": { "name": "Mekoy" }
+}

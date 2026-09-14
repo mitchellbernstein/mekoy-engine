@@ -1,0 +1,20 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "mekoy",
+  "version": "0.1.0",
+  "description": "Compile an owned AI system for one job. ChatGPT and Codex plugin.",
+  "skills": "../skills/",
+  "mcpServers": "../mcp.json",
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Mekoy",
+        "shortDescription": "Compile owned intelligence for one job",
+        "longDescription": "Describe a job. Mekoy compiles a specialist System you can host, self-host, or download. Training may be skipped.",
+        "developerName": "Mekoy",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"]
+      }
+    }
+  }
+}

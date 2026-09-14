@@ -1,0 +1,4 @@
+winner: k_shot=0 retries=1 quality=1.000 schema=1.000
+training: skipped
+arms:
+  k=0 retries=1 quality=1.000 schema=1.000

@@ -1,0 +1,37 @@
+# Dependencies
+web/node_modules/
+web/.pnp
+web/.pnp.js
+
+# Build artifacts
+web/.next/
+web/out/
+web/.turbo/
+web/tsconfig.tsbuildinfo
+
+# Env files
+.env
+.env.local
+.env*.local
+web/.env.local
+
+# Compiler artifacts
+.eval-approved
+compile-report.txt
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+src/mekoy.egg-info/
+dist/
+build/
+
+# OS
+.DS_Store
+*.DS_Store
+Thumbs.db

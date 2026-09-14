@@ -1,0 +1,9 @@
+{
+  "name": "mekoy",
+  "version": "0.1.0",
+  "description": "Compile an owned AI system for one job from Cursor.",
+  "author": { "name": "Mekoy" },
+  "keywords": ["mcp", "compiler"],
+  "skills": "../skills",
+  "mcpServers": "../mcp.json"
+}

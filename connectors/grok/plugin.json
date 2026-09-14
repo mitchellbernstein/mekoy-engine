@@ -1,0 +1,7 @@
+{
+  "name": "mekoy",
+  "version": "0.1.0",
+  "description": "Grok Build / Grok Bot plugin. Compile an owned System for one job.",
+  "skills": "../skills/",
+  "mcpServers": "../mcp.json"
+}

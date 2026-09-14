@@ -1,0 +1,18 @@
+{
+  "task": "receipt extract-and-verify",
+  "schema": {
+    "type": "object"
+  },
+  "slos": {
+    "quality": 1.0,
+    "cost_per_doc": 0.0,
+    "latency_ms": 0.0
+  },
+  "model_id": "qwen2.5:7b",
+  "k_shot": 0,
+  "retries": 1,
+  "ownership": {
+    "runtime_owned": true,
+    "downloadable": true
+  }
+}

@@ -1,0 +1,33 @@
+# The control plane: FastAPI + the /v1 surface. Not the System runtime.
+#
+#   docker build -f Dockerfile.api -t mekoy-api .
+#   docker run --rm -p 8787:8080 -e MEKOY_API_KEY=... mekoy-api
+#
+# This is the image `fly.toml` deploys. The other Dockerfile in this repo serves a
+# *downloaded System* (model server + CLI) and is not the same thing.
+
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    MEKOY_ARTIFACTS_DIR=/data/artifacts
+
+WORKDIR /app
+
+COPY pyproject.toml README.md ./
+COPY src ./src
+
+# uvicorn[standard] rather than bare uvicorn: without a websocket library uvicorn
+# answers an upgrade request with "No supported WebSocket library detected", which
+# is what a client asking for a streaming endpoint sees.
+RUN pip install --no-cache-dir "uvicorn[standard]" \
+    && pip install --no-cache-dir .
+
+# Bundles land here when deploy mode=download. Mount a volume to keep them.
+RUN mkdir -p /data/artifacts
+
+EXPOSE 8080
+
+# One worker: the store is process-local, so more workers would mean more than one
+# copy of every System. Scaling this needs the storage that PLAN 41.17 leaves open.
+CMD ["uvicorn", "mekoy.api.main:app", "--host", "0.0.0.0", "--port", "8080"]

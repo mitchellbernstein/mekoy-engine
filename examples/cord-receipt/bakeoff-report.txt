@@ -1,0 +1,6 @@
+holdout n=6
+baseline   gpt-6-astra          quality=0.806 schema=1.000 $0.0632
+challenger qwen2.5:7b           quality=0.806 schema=1.000 $0.0000
+compile k_shot=4 retries=0
+training: skipped
+verdict: CHALLENGER WINS
