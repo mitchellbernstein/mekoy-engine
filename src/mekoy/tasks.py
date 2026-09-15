@@ -20,12 +20,15 @@ from typing import TYPE_CHECKING, Protocol, cast
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
+from pydantic import BaseModel, create_model
+
 from mekoy.banking77 import (
     Intent,
     banking_gate,
     banking_prompt,
     score_intent,
 )
+from mekoy.jobs import CheckSpec, JobDefinition
 from mekoy.outcome import RestaurantOutcome
 from mekoy.receipt import RECEIPT_PROMPT, Receipt, numeric_problems, score_receipt
 from mekoy.score import score_fields
@@ -223,6 +226,153 @@ BANKING77 = Task(
     prompt_variants={"default": banking_prompt()},
     retry_ladder=(0, 1),
 )
+
+
+#: Two numbers within this are the same amount of money.
+_CENT = 0.005
+
+
+def _dynamic_model(definition: JobDefinition) -> type[BaseModel]:
+    """Build a pydantic model from a job definition's fields.
+
+    This is what lets a job arrive as data: the schema is what the model is constrained
+    to produce, so a definition with fields and types has everything needed to make one.
+    """
+    fields: dict[str, tuple[object, object]] = {}
+    for spec in definition.fields:
+        annotation: object = {
+            "string": str,
+            "integer": int,
+            "number": float,
+            "boolean": bool,
+            "array": list,
+            "object": dict,
+        }.get(spec.type, str)
+        # Everything is optional so a missing field is a gate reason rather than a
+        # parse error: an answer should be rejected for being wrong, not unreadable.
+        fields[spec.name] = (annotation | None, None)
+    title = definition.name.title().replace("_", "")
+    return create_model(f"{title}Outcome", **fields)  # type: ignore[call-overload]
+
+
+def _dynamic_gate(definition: JobDefinition) -> Callable[[object], tuple[str, ...]]:
+    """Build the checks a definition describes."""
+
+    def gate(outcome: object) -> tuple[str, ...]:
+        reasons: list[str] = []
+        for check in definition.checks:
+            if check.kind == "required":
+                reasons.extend(_missing(outcome, check))
+            elif check.kind == "arithmetic":
+                reasons.extend(_arithmetic(outcome, check))
+            elif check.kind == "supported":
+                reasons.extend(_unsupported(outcome, check))
+        return tuple(reasons)
+
+    return gate
+
+
+def _value(outcome: object, name: str) -> object:
+    """One field of an answer, however the answer is represented."""
+    if isinstance(outcome, dict):
+        return outcome.get(name)
+    return getattr(outcome, name, None)
+
+
+def _missing(outcome: object, check: CheckSpec) -> tuple[str, ...]:
+    """Fields the definition requires that the answer left empty."""
+    return tuple(
+        f"{name}: {check.message or 'missing'}"
+        for name in check.fields
+        if not _value(outcome, name)
+    )
+
+
+def _arithmetic(outcome: object, check: CheckSpec) -> tuple[str, ...]:
+    """Whether the numbers add up, to within a cent."""
+    total = _value(outcome, check.total)
+    if not isinstance(total, int | float):
+        return ()
+    parts = [_value(outcome, name) for name in check.parts]
+    if not all(isinstance(p, int | float) for p in parts):
+        return ()
+    computed = sum(float(p) for p in parts)  # type: ignore[arg-type]
+    if abs(computed - float(total)) < _CENT:
+        return ()
+    joined = "+".join(check.parts)
+    return (f"{joined}={computed:.2f} != {check.total}={float(total):.2f}",)
+
+
+def _unsupported(outcome: object, check: CheckSpec) -> tuple[str, ...]:
+    """A claim the record contradicts.
+
+    Only the boolean case is expressed: a claim that something happened when the
+    record says it did not. That is the shape the restaurant gate needs, and inventing
+    a general entailment engine here would be guesswork dressed as a check.
+    """
+    if not check.claim:
+        return ()
+    claim = _value(outcome, check.claim)
+    text = _value(outcome, check.source)
+    if claim is not True or not isinstance(text, str):
+        return ()
+    denied = ("not book", "did not book", "no reservation", "could not", "couldn't")
+    if any(phrase in text.lower() for phrase in denied):
+        return (check.message or f"{check.claim} contradicts the document",)
+    return ()
+
+
+def task_from_definition(definition: JobDefinition) -> Task:
+    """Turn a data-defined job into something the compiler can run.
+
+    Every field is scored, because a definition does not say which fields are the point.
+    Sections that need a per-task scorer keep their own code; this covers the case the
+    product actually needs, which is a user describing a new job.
+    """
+    model = _dynamic_model(definition)
+    return Task(
+        name=definition.name,
+        model=model,
+        prompt=definition.prompt or _prompt_for(definition),
+        scored_fields=definition.names(),
+        phrase_fields=frozenset(spec.name for spec in definition.fields if spec.phrase),
+        time_fields=frozenset(spec.name for spec in definition.fields if spec.time),
+        gate=_dynamic_gate(definition),
+        score=_scorer_for(definition),
+        prompt_variants={"default": definition.prompt or _prompt_for(definition)},
+        retry_ladder=definition.retry_ladder,
+    )
+
+
+def _prompt_for(definition: JobDefinition) -> str:
+    """The instruction, written from the definition when none was supplied."""
+    fields = "\n".join(
+        f"- {spec.name} ({spec.type})" + (" - free text" if spec.phrase else "")
+        for spec in definition.fields
+    )
+    return (
+        f"{definition.task}\n\n"
+        f"Return one JSON object with these fields:\n{fields}\n\n"
+        "Use only what the document supports. Leave a field empty rather than guessing."
+    )
+
+
+def _scorer_for(definition: JobDefinition) -> Callable[..., Scored]:
+    """Field accuracy over the definition's own fields."""
+    scored = definition.names()
+    phrase = frozenset(spec.name for spec in definition.fields if spec.phrase)
+    times = frozenset(spec.name for spec in definition.fields if spec.time)
+
+    def score(*, gold: object, pred: object) -> Scored:
+        return score_fields(
+            gold=gold,
+            pred=pred,
+            scored_fields=scored,
+            phrase_fields=phrase,
+            time_fields=times,
+        )
+
+    return score
 
 
 #: Every task class the compiler knows. Adding one here is what makes it

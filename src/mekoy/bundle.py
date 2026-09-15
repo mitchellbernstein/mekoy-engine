@@ -16,7 +16,7 @@ from mekoy.compile import CompileReport
 from mekoy.dataset import TaskExample
 from mekoy.errors import CompileError
 from mekoy.outcome import RestaurantOutcome
-from mekoy.spec import OwnershipFlags, Slos, SystemSpec, write_spec
+from mekoy.spec import SPEC_VERSION, OwnershipFlags, Slos, SystemSpec, write_spec
 
 #: A downloaded System runs locally and can leave our hosts. PLAN §31.
 _OWNED = OwnershipFlags(runtime_owned=True, downloadable=True)
@@ -106,32 +106,48 @@ def spec_for(
 ) -> SystemSpec:
     """Build the portable spec from a finished compile.
 
-    The winner's k-shot, retries, and SLOs travel with the System, so a download
-    reproduces the harness that was measured rather than a default.
+    The whole winner's harness travels with the System, not a selection of it. This
+    function used to hand-pick `k_shot` and `retries` and silently drop the other five
+    axes, so the restaurant winner `k=4 r=0 schema strict` was exported as `k=4 r=0` and
+    a recipient running the bundle got the **default** brief instead of the strict one.
+    The score they were quoted was measured on a harness they did not receive.
+
+    `spec_version` is raised here, and not merely carried, because that version is what
+    tells a reader these axes are present rather than defaulted.
     """
     winner = report.winner
+    config = winner.config
     slos = report.slos or Slos(
         quality=winner.quality,
         cost_per_doc=report.test.cost_usd,
         latency_ms=report.test.latency_ms,
     )
     return SystemSpec(
+        spec_version=SPEC_VERSION,
         task=task or "restaurant call extraction",
         json_schema=RestaurantOutcome.model_json_schema(),
         slos=slos,
         model_id=model_id,
-        k_shot=winner.config.k_shot,
-        retries=winner.config.retries,
+        k_shot=config.k_shot,
+        retries=config.retries,
+        constrained=config.constrained,
+        prompt=config.prompt,
+        schema_constrained=config.schema,
+        consistency=config.consistency,
+        bootstrap=config.bootstrap,
         ownership=_OWNED,
     )
 
 
-def write_bundle(
+def write_bundle(  # noqa: PLR0913 - a bundle names each artefact it writes
     directory: Path,
     spec: SystemSpec,
     report_text: str,
     *,
     examples: tuple[TaskExample, ...] = (),
+    holdout: tuple[TaskExample, ...] = (),
+    run_log: str = "",
+    environment: dict[str, object] | None = None,
 ) -> Path:
     """Write everything a recipient needs to run and check the System.
 
@@ -159,6 +175,19 @@ def write_bundle(
     if examples:
         _ = (directory / "examples.jsonl").write_text(
             _examples_text(examples), encoding="utf-8"
+        )
+    # The held-out rows are what make the advertised score checkable rather than
+    # asserted. Without them a recipient has our number and no way to test it, which is
+    # the difference between evidence and a claim.
+    if holdout:
+        _ = (directory / "holdout.jsonl").write_text(
+            _examples_text(holdout), encoding="utf-8"
+        )
+    if run_log:
+        _ = (directory / "run-log.txt").write_text(run_log, encoding="utf-8")
+    if environment:
+        _ = (directory / "environment.json").write_text(
+            json.dumps(environment, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
     _ = (directory / "docker-compose.yml").write_text(_compose(), encoding="utf-8")
     _ = (directory / "README.md").write_text(
@@ -244,5 +273,19 @@ def _readme(spec: SystemSpec, *, has_examples: bool) -> str:
         f"- `spec.json` — schema, SLOs, ownership flags, the harness knobs, and\n"
         f"  `spec_version`.\n"
         f"- `report.txt` — the compile card: what was tried and what it scored.\n"
+        f"- `holdout.jsonl` — the held-out rows the advertised score was measured on.\n"
+        f"- `run-log.txt` — what the search tried, in order.\n"
+        f"- `environment.json` — the model, server, and seed behind the number.\n"
         f"- `docker-compose.yml` — the model server.\n"
+        f"\n"
+        f"## Check the number yourself\n\n"
+        f"The advertised score is not ours to assert. Recompute it from this\n"
+        f"directory:\n\n"
+        f"```\n"
+        f"mekoy verify-bundle .\n"
+        f"```\n\n"
+        f"That re-runs the held-out rows through the same harness and scorer and\n"
+        f"reports whether it agrees. It needs the model, so start the server first.\n"
+        f"If it\n"
+        f"disagrees, the number was not reproducible and you should not trust it.\n"
     )

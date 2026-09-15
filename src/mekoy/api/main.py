@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from time import perf_counter, sleep
 from typing import Annotated, assert_never
 
 from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from mekoy.api import mcp_http
 from mekoy.api.auth import API_KEY_ENV, AuthMiddleware, settings_from_env
+from mekoy.api.events import TERMINAL, EventKind, EventLog, RunEvent
 from mekoy.api.mcp_http import router as mcp_router
 from mekoy.api.models import (
     ChatCompletionChoice,
@@ -49,6 +52,7 @@ from mekoy.api.store import (
 )
 from mekoy.artifacts import ArtifactStore, store_from_env, write_bundle_to
 from mekoy.bundle import spec_for
+from mekoy.catalog import Catalog
 from mekoy.compare import compare_cards
 from mekoy.compile import CompileReport, SearchSpace, compile_system
 from mekoy.dataset import Split, TaskExample, coerce_label, split_examples
@@ -76,11 +80,18 @@ def _warn_open_api() -> None:
 
 @dataclass(frozen=True, slots=True)
 class AppContext:
-    """Per-app store, optional injected completer, and artifact destination."""
+    """Per-app store, optional injected completer, artifact destination, catalog."""
 
     store: Store
     completer: Completer | None
+    #: Where a compile's progress lands. Beside the store because both live in the same
+    #: SQLite file, and the log outlives the process that wrote it so a client can
+    #: attach late and still see the run.
+    events: EventLog = field(default_factory=EventLog)
     artifacts: ArtifactStore = field(default_factory=store_from_env)
+    #: Published Systems. Empty by default, which is the honest state: nothing can be
+    #: listed until its score is recomputable.
+    catalog: Catalog = field(default_factory=Catalog)
 
 
 def get_ctx() -> AppContext:
@@ -234,15 +245,35 @@ def _run_compile(  # noqa: PLR0913 - the task carries what the request already r
     move it. Nothing is raised past this point - the caller is gone by now, and a
     traceback would only reach the log while the run stayed open.
     """
+
+    def note(kind: str, data: dict[str, object]) -> None:
+        """Record one step of the compile, for whoever is watching.
+
+        Written to the log rather than pushed to a socket, so a client that attaches
+        after this ran still sees the whole history.
+        """
+        _ = ctx.events.append(run_id, RunEvent(kind=EventKind(kind), data=data))
+
     try:
-        report = compile_system(completer, split, space, task=task)
+        report = compile_system(completer, split, space, task=task, on_event=note)
     except CompileError as exc:
         _ = ctx.store.fail_run(run_id, exc.message)
+        note("run_finished", {"status": "failed", "error": exc.message})
         return
     except BaseException as exc:  # noqa: BLE001 - recorded, never re-raised
         _ = ctx.store.fail_run(run_id, f"{type(exc).__name__}: {exc}")
+        reason = f"{type(exc).__name__}: {exc}"
+        note("run_finished", {"status": "failed", "error": reason})
         return
     _ = ctx.store.succeed_run(run_id, report)
+    note(
+        "run_finished",
+        {
+            "status": "succeeded",
+            "config": report.winner.config.label,
+            "quality": round(report.test.quality, 6),
+        },
+    )
 
 
 @_router.get("/v1/runs/{run_id}", tags=["runs"])
@@ -252,6 +283,70 @@ def get_run(
 ) -> RunResponse:
     """Poll a compile run."""
     return run_out(ctx.store.get_run(run_id))
+
+
+#: How long to wait between checks for new events once the log is caught up. Short
+#: enough that a pane feels live, long enough not to spin a core.
+_EVENT_POLL_S = 0.25
+
+#: Give up following a run that never finishes. A compile has a budget, so a stream that
+#: outlives this is a bug rather than patience.
+_EVENT_TIMEOUT_S = 3600.0
+
+
+@_router.get("/v1/runs/{run_id}/events", tags=["runs"])
+def run_events(
+    run_id: str,
+    request: Request,
+    ctx: Annotated[AppContext, Depends(get_ctx)],
+) -> StreamingResponse:
+    """Stream a run's progress as server-sent events.
+
+    Replays what already happened, then follows along. SSE rather than a websocket
+    because progress only travels one way, and because the `id` on each frame gives
+    reconnection for free: a client that drops sends `Last-Event-ID` and resumes after
+    the last event it received, with no bookkeeping on either side.
+
+    The run is checked first, so a client asking about a run that does not exist gets a
+    404 rather than a stream that never says anything.
+    """
+    _ = ctx.store.get_run(run_id)
+    after = _last_event_id(request)
+
+    def frames() -> Iterator[str]:
+        """Yield events until the run ends or the client gives up."""
+        cursor = after
+        deadline = perf_counter() + _EVENT_TIMEOUT_S
+        while True:
+            for event in ctx.events.since(run_id, after=cursor):
+                cursor = event.seq
+                yield event.to_sse()
+                if event.kind in TERMINAL:
+                    return
+            if perf_counter() > deadline:
+                return
+            sleep(_EVENT_POLL_S)
+
+    return StreamingResponse(
+        frames(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            # Without this a proxy will happily buffer the whole stream and deliver it
+            # at the end, which is exactly the behaviour the pane exists to avoid.
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _last_event_id(request: Request) -> int:
+    """Where to resume from, if the client says it dropped mid-stream."""
+    raw = request.headers.get("last-event-id", "").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
 
 
 @_router.post("/v1/systems/{system_id}/invoke", tags=["systems"])
@@ -378,12 +473,24 @@ def deploy_system(
         stopped_early=False,
     )
     spec = spec_for(compiled, task=record.task, model_id=body.model)
+    # The held-out rows travel so the advertised score is checkable rather than
+    # asserted, and the environment travels so a recomputation can match it.
+    split = split_examples(record.examples)
     out = write_bundle_to(
         ctx.artifacts,
         system_id,
         spec,
         latest.report,
         examples=record.examples,
+        holdout=split.test,
+        environment={
+            "model": latest.model or body.model,
+            "base_url": os.environ.get("MEKOY_MODEL_BASE_URL", ""),
+            "k_shot": latest.winner.config.k_shot,
+            "retries": latest.winner.config.retries,
+            "constrained": latest.winner.config.constrained,
+            "task_name": record.task_name,
+        },
     )
     return DeployResponse(
         mode=body.mode,
@@ -511,7 +618,10 @@ def _default_db_path() -> Path | None:
 
 def create_app(*, completer: Completer | None = None) -> FastAPI:
     """Build an app with its own store, persisted when MEKOY_DB names a file."""
-    ctx = AppContext(store=Store(db_path=_default_db_path()), completer=completer)
+    _db = _default_db_path()
+    ctx = AppContext(
+        store=Store(db_path=_db), events=EventLog(db_path=_db), completer=completer
+    )
     # One store for both doors: a System compiled through the connector has to be the
     # System the HTTP API can find, or the two surfaces describe different worlds.
     mcp_http.bind_context(lambda: ctx)
@@ -542,6 +652,11 @@ def create_app(*, completer: Completer | None = None) -> FastAPI:
     )
     application.include_router(_router)
     application.include_router(mcp_router)
+    # Imported here rather than at module scope: the catalog routes read AppContext and
+    # get_ctx from this module, so a top-level import would be circular.
+    from mekoy.api.catalog_routes import _router as catalog_router  # noqa: PLC0415
+
+    application.include_router(catalog_router)
 
     def _provide() -> AppContext:
         return ctx

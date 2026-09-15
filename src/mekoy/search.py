@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 import random
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from time import perf_counter
@@ -555,6 +555,84 @@ def _prune_keep(n: int) -> int:
     return max(1, n // _PRUNE_ETA)
 
 
+def _staged_rungs(  # noqa: PLR0913 - a rung needs the whole search's context
+    completer: Completer,
+    *,
+    chosen: list[HarnessConfig],
+    dev: tuple[ExampleRecord, ...],
+    shots: tuple[ExampleRecord, ...],
+    task: Task,
+    bootstrapped: tuple[tuple[str, object], ...],
+    models: Mapping[str, Completer] | None,
+    clears: Callable[[Trial], bool],
+    seen: list[Trial],
+    full: list[Trial],
+    tell: Callable[..., None],
+    observed: Callable[..., None],
+) -> bool:
+    """Price every candidate on a minibatch, then give survivors a full dev pass.
+
+    Returns whether the run stopped early on an SLO. Split out of `search` because the
+    progress reporting made the two rungs long enough to be worth naming.
+    """
+    rung = dev[: _rung_size(dev)]
+    priced: list[Trial] = []
+    for config in chosen:
+        tell("arm_started", config=config.label, rung="minibatch")
+        trial = evaluate(
+            completer,
+            rung,
+            config,
+            shots=shots,
+            task=task,
+            bootstrapped=bootstrapped,
+            models=models,
+        )
+        seen.append(trial)
+        priced.append(trial)
+        observed(trial, rung="minibatch")
+        if not trial.violations and clears(trial):
+            tell("arm_started", config=config.label, rung="dev")
+            confirmed = evaluate(
+                completer,
+                dev,
+                config,
+                shots=shots,
+                task=task,
+                models=models,
+            )
+            seen.append(confirmed)
+            full.append(confirmed)
+            observed(confirmed, rung="dev")
+            return not confirmed.violations and clears(confirmed)
+
+    ranked = sorted(priced, key=lambda t: (t.violations == 0, t.quality), reverse=True)
+    keep = ranked[: _prune_keep(len(ranked))]
+    tell(
+        "rung_pruned",
+        kept=len(keep),
+        dropped=len(ranked) - len(keep),
+        rung="minibatch",
+    )
+    for trial in keep:
+        tell("arm_started", config=trial.config.label, rung="dev")
+        survivor = evaluate(
+            completer,
+            dev,
+            trial.config,
+            shots=shots,
+            task=task,
+            bootstrapped=bootstrapped,
+            models=models,
+        )
+        seen.append(survivor)
+        full.append(survivor)
+        observed(survivor, rung="dev")
+        if not survivor.violations and clears(survivor):
+            return True
+    return False
+
+
 def search(  # noqa: PLR0913 - the search entry point names its knobs
     completer: Completer,
     *,
@@ -565,6 +643,7 @@ def search(  # noqa: PLR0913 - the search entry point names its knobs
     task: Task = RESTAURANT,
     bootstrapped: tuple[tuple[str, object], ...] = (),
     models: Mapping[str, Completer] | None = None,
+    on_event: Callable[[str, dict[str, object]], None] | None = None,
 ) -> tuple[Trial, tuple[Trial, ...], bool]:
     """Search on dev. Returns (winner, every measured trial, stopped_early).
 
@@ -572,6 +651,11 @@ def search(  # noqa: PLR0913 - the search entry point names its knobs
     priced on a minibatch, then only survivors earn a full dev pass. Both loops
     check the SLO after each candidate, so a compile that has already won stops
     instead of spending the rest of its budget (PLAN §15.12).
+
+    `on_event` is called with (kind, data) as the search progresses, and is the only
+    reason a caller can watch a compile happen. It is optional so the search stays
+    usable with no server attached, and it is called synchronously so events arrive in
+    the order the measurements happened.
     """
     spend = budget or Budget()
     chosen = space.sample(spend.trials, seed=spend.seed)
@@ -579,62 +663,45 @@ def search(  # noqa: PLR0913 - the search entry point names its knobs
     full: list[Trial] = []
     stopped = False
 
+    def tell(kind: str, **data: object) -> None:
+        """Report progress, if anyone is listening."""
+        if on_event is not None:
+            on_event(kind, data)
+
+    def observed(trial: Trial, *, rung: str) -> None:
+        """Record one measured candidate."""
+        tell(
+            "arm_scored",
+            config=trial.config.label,
+            quality=round(trial.quality, 6),
+            violations=trial.violations,
+            rung=rung,
+        )
+
     def clears(trial: Trial) -> bool:
         return spend.slos is not None and trial.meets(spend.slos)
 
     staged = spend.staged and len(dev) > _STAGING_FLOOR and len(chosen) > 1
+    tell("run_started", arms=len(chosen), staged=staged, dev_rows=len(dev))
 
     if staged:
-        rung = dev[: _rung_size(dev)]
-        priced: list[Trial] = []
-        for config in chosen:
-            trial = evaluate(
-                completer,
-                rung,
-                config,
-                shots=shots,
-                task=task,
-                bootstrapped=bootstrapped,
-                models=models,
-            )
-            seen.append(trial)
-            priced.append(trial)
-            if not trial.violations and clears(trial):
-                confirmed = evaluate(
-                    completer,
-                    dev,
-                    config,
-                    shots=shots,
-                    task=task,
-                    models=models,
-                )
-                seen.append(confirmed)
-                full.append(confirmed)
-                stopped = not confirmed.violations and clears(confirmed)
-                break
-        if not stopped:
-            ranked = sorted(
-                priced,
-                key=lambda t: (t.violations == 0, t.quality),
-                reverse=True,
-            )
-            for trial in ranked[: _prune_keep(len(ranked))]:
-                survivor = evaluate(
-                    completer,
-                    dev,
-                    trial.config,
-                    shots=shots,
-                    task=task,
-                    bootstrapped=bootstrapped,
-                    models=models,
-                )
-                seen.append(survivor)
-                full.append(survivor)
-                if not survivor.violations and clears(survivor):
-                    stopped = True
-                    break
+        stopped = _staged_rungs(
+            completer,
+            chosen=chosen,
+            dev=dev,
+            shots=shots,
+            task=task,
+            bootstrapped=bootstrapped,
+            models=models,
+            clears=clears,
+            seen=seen,
+            full=full,
+            tell=tell,
+            observed=observed,
+        )
     else:
         for config in chosen:
+            tell("arm_started", config=config.label, rung="dev")
             trial = evaluate(
                 completer,
                 dev,
@@ -646,6 +713,7 @@ def search(  # noqa: PLR0913 - the search entry point names its knobs
             )
             seen.append(trial)
             full.append(trial)
+            observed(trial, rung="dev")
             if not trial.violations and clears(trial):
                 stopped = True
                 break
@@ -653,6 +721,12 @@ def search(  # noqa: PLR0913 - the search entry point names its knobs
     clean = [t for t in full if not t.violations]
     ranked = clean or full or seen
     winner = pick(pareto_front(tuple(ranked)))
+    tell(
+        "search_settled",
+        config=winner.config.label,
+        quality=round(winner.quality, 6),
+        measured=len(seen),
+    )
     return winner, tuple(seen), stopped
 
 

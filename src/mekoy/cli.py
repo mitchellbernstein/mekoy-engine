@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from collections.abc import Callable
 from dataclasses import replace
@@ -35,6 +36,7 @@ from mekoy.sroie import load_sroie
 from mekoy.tasks import task_for_path
 from mekoy.tracking import DEFAULT_LOG_NAME, record, run_from_report
 from mekoy.verify import VerifyFail, VerifyOk, explain
+from mekoy.verify_bundle import verify
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 console = Console()
@@ -556,6 +558,24 @@ def _require_eval(examples: Path) -> None:
     if not stamp.is_file():
         msg = "eval is not approved; run: mekoy eval --approve"
         raise CompileError(message=msg)
+
+
+@app.command("verify-bundle")
+def verify_bundle(
+    directory: Path = typer.Argument(..., help="A downloaded System directory."),
+) -> None:
+    """Recompute a bundle's advertised score from the bundle alone."""
+    model = os.environ.get("MEKOY_MODEL", "qwen2.5:7b")
+    base = os.environ.get("MEKOY_MODEL_BASE_URL", "http://127.0.0.1:11434/v1")
+    completer = OllamaCompleter(base_url=base, model=model)
+    try:
+        result = verify(directory, completer=completer)
+    except CompileError as exc:
+        typer.echo(exc.message)
+        raise typer.Exit(code=1) from exc
+    typer.echo(result.explain())
+    if not result.agrees:
+        raise typer.Exit(code=1)
 
 
 @app.command()

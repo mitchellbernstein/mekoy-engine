@@ -71,13 +71,15 @@ def store_from_env() -> ArtifactStore:
     return LocalArtifacts(base=Path(root) if root else DEFAULT_ROOT)
 
 
-def write_bundle_to(
+def write_bundle_to(  # noqa: PLR0913 - forwards what a bundle needs
     store: ArtifactStore,
     system_id: str,
     spec: SystemSpec,
     report_text: str,
     *,
     examples: tuple[TaskExample, ...] = (),
+    holdout: tuple[TaskExample, ...] = (),
+    environment: dict[str, object] | None = None,
 ) -> Path:
     """Write a bundle through the store, guarding the path it resolves to."""
     target = Path(store.locator(system_id)).resolve()
@@ -85,4 +87,11 @@ def write_bundle_to(
     if root not in target.parents:
         msg = f"refusing to write a bundle outside {root}: {target}"
         raise CompileError(message=msg)
-    return write_bundle(target, spec, report_text, examples=examples)
+    return write_bundle(
+        target,
+        spec,
+        report_text,
+        examples=examples,
+        holdout=holdout,
+        environment=environment,
+    )

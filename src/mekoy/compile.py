@@ -7,7 +7,7 @@ Training is not run on this path; that is a first-class outcome in the report.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from time import perf_counter
 
@@ -100,11 +100,14 @@ def compile_system(  # noqa: PLR0913, PLR0917 - the compile entry point names it
     task: Task = RESTAURANT,
     bootstrapped: tuple[tuple[str, object], ...] = (),
     models: Mapping[str, object] | None = None,
+    on_event: Callable[[str, dict[str, object]], None] | None = None,
 ) -> CompileReport:
     """Search the harness space on dev, then measure the winner on test.
 
     Refuses a closed-API completer unless `allow_closed` is set, so no closed
-    model output can quietly become compile data.
+    model output can quietly become compile data. `on_event` is passed through to the
+    search so a caller can watch the compile, and defaults to None so every existing
+    caller is unaffected.
     """
     assert_local(completer, allow_closed=allow_closed)
     spend = budget or Budget()
@@ -118,6 +121,7 @@ def compile_system(  # noqa: PLR0913, PLR0917 - the compile entry point names it
         task=task,
         bootstrapped=bootstrapped,
         models=models,  # type: ignore[arg-type]
+        on_event=on_event,
     )
     test = evaluate(
         completer,  # type: ignore[arg-type]
@@ -128,6 +132,15 @@ def compile_system(  # noqa: PLR0913, PLR0917 - the compile entry point names it
         bootstrapped=bootstrapped,
         models=models,  # type: ignore[arg-type]
     )
+    if on_event is not None:
+        on_event(
+            "test_scored",
+            {
+                "config": winner.config.label,
+                "quality": round(test.quality, 6),
+                "rows": len(test.scores),
+            },
+        )
     return CompileReport(
         winner=winner,
         trials=tried,

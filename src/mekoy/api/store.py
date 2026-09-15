@@ -15,7 +15,7 @@ from mekoy.dataset import TaskExample
 from mekoy.errors import CompileError
 from mekoy.score import ExampleScore
 from mekoy.search import HarnessConfig
-from mekoy.spec import SystemSpec, load_spec
+from mekoy.spec import SPEC_VERSION, SystemSpec, load_spec
 from mekoy.tasks import task_by_name
 
 
@@ -191,9 +191,10 @@ def _trial_in(data: dict[str, object]) -> Trial:
     )
 
 
-#: The newest spec format this code understands. A bundle from the future is skipped
-#: rather than half-read, because a field whose meaning changed cannot be guessed.
-_SPEC_VERSION_KNOWN = 1
+#: The newest spec format this code understands, taken from the model rather than
+#: written down twice. It was written down twice for about ten minutes, and in that time
+#: recovery silently skipped every bundle the engine was producing.
+_SPEC_VERSION_KNOWN = SPEC_VERSION
 
 
 def _examples_from(path: Path) -> tuple[TaskExample, ...]:

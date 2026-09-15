@@ -6,7 +6,7 @@ Fields come in two kinds, and they are not scored the same way:
 - **Free-text fields** (`restaurant`, `when`, `under_name`) compare on normalized
   tokens, so "9am Saturday" and "Saturday 9am" are the same answer. `when` goes
   further and ignores time formatting and filler, so "Sunday at 1:00 PM" and
-  "Sunday at 1pm" agree. Free text is judged, never gated on exact
+  "Sunday at 1pm" agree. PLAN §16.3: free text is judged, never gated on exact
   match.
 
 `quality` is the primary number (normalized). `strict_quality` keeps raw string
@@ -92,6 +92,18 @@ def score_outcome(*, gold: RestaurantOutcome, pred: RestaurantOutcome) -> Exampl
     )
 
 
+def _field(record: object, name: str) -> object:
+    """One field of a record, whether it is an object or a plain dict.
+
+    A job defined in data carries dict labels, because that is what JSON gives back
+    and what a user's examples file contains. Reading only attributes would score
+    every field of such a job as missing, so both shapes are read here.
+    """
+    if isinstance(record, dict):
+        return record.get(name)
+    return getattr(record, name, None)
+
+
 def score_fields(
     *,
     gold: object,
@@ -108,12 +120,12 @@ def score_fields(
     hits = 0
     strict = 0
     for name in scored_fields:
-        want, got = getattr(gold, name), getattr(pred, name)
+        want, got = _field(gold, name), _field(pred, name)
         if _exact(want, got):
             strict += 1
         if _field_matches(name, want, got, phrase_fields, time_fields):
             hits += 1
-    booked_same = getattr(gold, "booked", None) == getattr(pred, "booked", None)
+    booked_same = _field(gold, "booked") == _field(pred, "booked")
     return ExampleScore(
         schema_ok=True,
         field_hits=hits,

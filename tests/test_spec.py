@@ -1,10 +1,21 @@
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from mekoy.bundle import spec_for
+from mekoy.compile import CompileReport, Trial
 from mekoy.errors import CompileError
-from mekoy.spec import OwnershipFlags, Slos, SystemSpec, load_spec, write_spec
+from mekoy.search import HarnessConfig
+from mekoy.spec import (
+    SPEC_VERSION,
+    OwnershipFlags,
+    Slos,
+    SystemSpec,
+    load_spec,
+    write_spec,
+)
 
 _SCHEMA: dict[str, object] = {
     "type": "object",
@@ -73,3 +84,71 @@ def test_spec_rejects_negative_k_shot() -> None:
 def test_load_spec_missing_file(tmp_path: Path) -> None:
     with pytest.raises(CompileError, match="spec not found"):
         _ = load_spec(tmp_path / "missing.json")
+
+
+def _base_spec(**over: object) -> SystemSpec:
+    """A spec with the required fields filled, so a test can vary one thing."""
+    fields: dict[str, object] = {
+        "task": "restaurant call extraction",
+        "json_schema": {"type": "object", "properties": {"a": {"type": "string"}}},
+        "slos": Slos(quality=0.9, cost_per_doc=0.0, latency_ms=1.0),
+        "model_id": "qwen2.5:7b",
+        "k_shot": 4,
+        "retries": 0,
+        "ownership": OwnershipFlags(runtime_owned=True, downloadable=True),
+    }
+    fields.update(over)
+    return SystemSpec(**fields)
+
+
+def test_a_spec_carries_the_whole_harness() -> None:
+    """A bundle that loses an axis hands over a System nobody measured.
+
+    This is the defect `verify-bundle` surfaced on its first use. The restaurant winner
+    is `k=4 r=0 schema strict`; a spec recording only `k_shot` and `retries` exported it
+    as `k=4 r=0`, so a recipient got the default brief and a different score than the
+    one they were quoted.
+    """
+    strict = _base_spec(
+        spec_version=SPEC_VERSION, prompt="strict", schema_constrained=True
+    )
+    default = _base_spec(spec_version=SPEC_VERSION)
+
+    assert strict.harness().prompt == "strict"
+    assert strict.harness().schema is True
+    assert strict.harness() != default.harness(), "the axes must reach the harness"
+    assert strict.carries_harness
+
+
+def test_a_spec_from_before_the_harness_was_recorded_is_not_verifiable() -> None:
+    """The honest answer is "cannot check", never a default scored as if it were real.
+
+    Every bundle written before the axes existed parses fine and silently defaults all
+    five, which is indistinguishable from a System that genuinely chose the defaults.
+    """
+    old = _base_spec(spec_version=1)
+    assert not old.carries_harness
+
+
+def test_spec_for_writes_every_axis_the_search_can_turn() -> None:
+    """The writer is where the loss happened, so the writer is where it is pinned."""
+    config = HarnessConfig(
+        k_shot=4,
+        retries=0,
+        constrained=True,
+        prompt="strict",
+        schema=True,
+        consistency=1,
+    )
+    winner = Trial(config=config, scores=())
+    report = CompileReport(
+        winner=winner, trials=(winner,), test=winner, stopped_early=False
+    )
+    spec = spec_for(report, task="job", model_id="qwen2.5:7b")
+
+    assert spec.spec_version == SPEC_VERSION, "an older version makes the reader refuse"
+    rebuilt = spec.harness()
+    for axis in fields(HarnessConfig):
+        if axis.name == "model":
+            continue  # the spec's model_id is the model to run, not the search axis
+        assert getattr(rebuilt, axis.name) == getattr(config, axis.name), axis.name
