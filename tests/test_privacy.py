@@ -52,3 +52,56 @@ def test_compile_refuses_a_closed_completer() -> None:
     rows = load_examples(Path("examples/bucko-restaurant/examples.jsonl"))
     with pytest.raises(ClosedApiError):
         compile_system(_Fake(), split_examples(rows), SearchSpace.single())
+
+
+def test_a_closed_endpoint_cannot_hide_behind_a_local_class() -> None:
+    """The hole this test exists for: every OllamaCompleter declares itself local.
+
+    The gate read that declaration and nothing else, so pointing the engine at a closed
+    API - `--base-url https://api.openai.com/v1` - passed the check and that model's
+    output became compile data. It was enforced by which class was constructed rather
+    than by where it connects, on the one rule this project calls non-negotiable.
+    """
+    for remote in (
+        "https://api.openai.com/v1",
+        "https://api.anthropic.com/v1",
+        "https://generativelanguage.googleapis.com/v1",
+        "https://someones-box.example.com/v1",
+    ):
+        completer = OllamaCompleter(base_url=remote, model="m")
+        assert not is_local(completer), remote
+        with pytest.raises(ClosedApiError):
+            assert_local(completer)
+
+
+def test_a_genuinely_local_endpoint_is_allowed() -> None:
+    """The fix must not block the runtime the engine ships with."""
+    for local in (
+        "http://127.0.0.1:11434/v1",
+        "http://localhost:11434/v1",
+        "http://[::1]:11434/v1",
+        "http://192.168.1.50:11434/v1",
+        "http://workstation.local:11434/v1",
+    ):
+        assert is_local(OllamaCompleter(base_url=local, model="m")), local
+    assert_local(OllamaCompleter(base_url="http://127.0.0.1:11434/v1", model="m"))
+
+
+def test_an_unmarked_completer_still_fails_closed() -> None:
+    """A new runtime that forgets to declare itself must not become compile data."""
+
+    class Unmarked:
+        def __init__(self) -> None:
+            self.base_url = "http://127.0.0.1:11434/v1"
+
+    assert not is_local(Unmarked())
+    with pytest.raises(ClosedApiError):
+        assert_local(Unmarked())
+
+
+def test_allow_closed_is_still_an_explicit_opt_in() -> None:
+    """A baseline score is the one legal use, and it stays possible."""
+    assert_local(
+        OllamaCompleter(base_url="https://api.openai.com/v1", model="m"),
+        allow_closed=True,
+    )
