@@ -32,10 +32,18 @@ class OwnershipFlags(BaseModel):
 
 
 class SystemSpec(BaseModel):
-    """Task, schema, SLOs, winner model, harness knobs, ownership."""
+    """Task, schema, SLOs, winner model, harness knobs, ownership.
+
+    `spec_version` exists because a downloaded System outlives the engine that wrote it.
+    Without it, a bundle written by one format and read by another cannot detect that it
+    is being misread: it would parse the fields it recognises and quietly default the
+    rest, which is the one failure a portable artifact must never have.
+    """
 
     model_config: ClassVar[ConfigDict] = _FROZEN
 
+    #: Bumped when the meaning of a field changes. A reader must refuse a newer one.
+    spec_version: int = Field(default=1, ge=1)
     task: str = Field(min_length=1)
     json_schema: dict[str, object] = Field(
         min_length=1,

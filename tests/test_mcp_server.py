@@ -1,9 +1,14 @@
 import json
+import pathlib
 from pathlib import Path
 
+import pytest
+
 from mekoy.dataset import ExampleRecord, load_examples
-from mekoy.mcp_server import TOOLS, Server
+from mekoy.errors import CompileError
+from mekoy.mcp_server import TOOLS, Server, _path, _Record
 from mekoy.outcome import RestaurantOutcome
+from mekoy.search import HarnessConfig
 from mekoy.verify import CHECKS_SUMMARY
 
 _FIXTURE = Path("examples/bucko-restaurant/examples.jsonl")
@@ -189,3 +194,99 @@ def test_inspect_and_list(tmp_path: Path) -> None:
     assert "propose_eval" in inspected
     listed = _call(server, "list_systems", {})
     assert str(examples.resolve()) in listed
+
+
+def _three_rows(tmp_path: Path) -> Path:
+    """A three-row example file, which is the minimum a compile accepts."""
+    rows = []
+    for i, name in enumerate(["Uchi", "Loro", "Sway"]):
+        rows.append(
+            {
+                "text": f"{name}, table for {i + 2} Friday 7pm under Maya.",
+                "outcome": {
+                    "restaurant": name,
+                    "intent": "reservation",
+                    "status": "confirmed",
+                    "party_size": i + 2,
+                    "when": "Friday 7pm",
+                    "under_name": "Maya",
+                    "evidence": "table for two",
+                    "booked": True,
+                },
+            }
+        )
+    path = tmp_path / "examples.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    pathlib.Path(str(path) + ".eval-approved").write_text("")
+    return path
+
+
+class _CountingCompleter:
+    """Records the prompt it was handed, so the harness it ran can be inspected."""
+
+    local = True
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def complete(self, *, system: str, user: str, **_rest: object) -> str:
+        del system
+        self.prompts.append(user)
+        return RestaurantOutcome(
+            restaurant="Uchi",
+            intent="reservation",
+            status="confirmed",
+            party_size=2,
+            when="Friday 7pm",
+            under_name="Maya",
+            evidence="table for two",
+            booked=True,
+        ).model_dump_json()
+
+
+def test_invoke_replays_the_winner_shot_count(tmp_path: Path) -> None:
+    """A System is the harness plus the model, so invoke must run the harness.
+
+    The shot count is the observable: if invoke replays the winner, the prompt carries
+    exactly as many examples as the winner asked for. It must scale with the winner, so
+    a constant would fail this.
+    """
+    path = _three_rows(tmp_path)
+    key = str(_path({"examples": str(path)}))
+
+    for wanted in (1, 3):
+        completer = _CountingCompleter()
+        server = Server(completer=completer)
+        record = server._systems.setdefault(key, _Record(pathlib.Path(key), "job"))
+        record.config = HarnessConfig(k_shot=wanted, retries=0, constrained=True)
+        _ = server._run(
+            "invoke_system", {"examples": str(path), "text": "Loro, table for 4."}
+        )
+        shown = completer.prompts[0].count('"restaurant"')
+        assert shown == wanted, f"winner asked for {wanted}, prompt carried {shown}"
+
+
+def test_invoke_refuses_rather_than_inventing_a_harness(tmp_path: Path) -> None:
+    """Silently running a default harness returns something that is not the System.
+
+    That failure mode is worse than an error, because the answer looks fine. A caller
+    who wants a one-off extraction can still say so by passing the settings explicitly.
+    """
+    path = _three_rows(tmp_path)
+
+    with pytest.raises(CompileError):
+        Server(completer=_CountingCompleter())._run(
+            "invoke_system", {"examples": str(path), "text": "Loro, table for 4."}
+        )
+
+    completer = _CountingCompleter()
+    out = Server(completer=completer)._run(
+        "invoke_system",
+        {
+            "examples": str(path),
+            "text": "Loro, table for 4.",
+            "k_shot": 1,
+            "retries": 0,
+        },
+    )
+    assert "Uchi" in out

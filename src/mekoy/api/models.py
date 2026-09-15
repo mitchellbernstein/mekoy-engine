@@ -160,6 +160,14 @@ class SystemDetail(BaseModel):
     run: RunResponse | None = None
 
 
+class SystemListResponse(BaseModel):
+    """Every System the control plane knows about."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+    systems: tuple[SystemDetail, ...]
+    n: int
+
+
 class ReportResponse(BaseModel):
     """The compile card, as text."""
 

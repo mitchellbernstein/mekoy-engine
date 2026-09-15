@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from enum import StrEnum
+from pathlib import Path
 from typing import assert_never
 
 from mekoy.compile import CompileReport, Trial, format_report
 from mekoy.dataset import TaskExample
 from mekoy.errors import CompileError
+from mekoy.score import ExampleScore
+from mekoy.search import HarnessConfig
+from mekoy.tasks import task_by_name
 
 
 class Phase(StrEnum):
@@ -103,13 +109,214 @@ def phase_of(record: SystemRecord) -> Phase:
             assert_never(unreachable)
 
 
-class Store:
-    """Process-local maps. Each create_app() owns one instance."""
+#: Tables. The index lives here; the per-System artifact directory stays the source of
+#: truth for the System itself, so a user can copy the folder and leave.
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS systems (
+    id        TEXT PRIMARY KEY,
+    task      TEXT NOT NULL,
+    task_name TEXT NOT NULL,
+    phase     TEXT NOT NULL,
+    examples  TEXT NOT NULL,
+    winner    TEXT,
+    report    TEXT
+);
+CREATE TABLE IF NOT EXISTS runs (
+    id         TEXT PRIMARY KEY,
+    system_id  TEXT NOT NULL,
+    status     TEXT NOT NULL,
+    quick      INTEGER NOT NULL,
+    model      TEXT NOT NULL,
+    report     TEXT,
+    winner     TEXT,
+    error      TEXT,
+    seq        INTEGER NOT NULL
+);
+"""
 
-    def __init__(self) -> None:
-        """Start empty."""
+
+def _outcome_out(outcome: object) -> object:
+    """An example's label, as JSON. Pydantic models become plain objects."""
+    dump = getattr(outcome, "model_dump", None)
+    if callable(dump):
+        return dump(mode="json")
+    return outcome
+
+
+def _outcome_in(task_name: str, data: object) -> object:
+    """Rebuild an example's label using the task's own model.
+
+    The label has to come back as the type the task's gate and scorer expect, and the
+    task name stored beside it is what says which type that is. Without it a reloaded
+    System would score its own examples differently from the run that produced it.
+    """
+    model = getattr(task_by_name(task_name), "model", None)
+    validate = getattr(model, "model_validate", None)
+    if callable(validate) and isinstance(data, dict):
+        return validate(data)
+    return data
+
+
+def _trial_out(trial: Trial) -> dict[str, object]:
+    """A measured candidate as JSON."""
+    return {
+        "config": asdict(trial.config),
+        "scores": [asdict(s) if is_dataclass(s) else s for s in trial.scores],
+        "latency_ms": trial.latency_ms,
+        "cost_usd": trial.cost_usd,
+        "reasons": list(trial.reasons),
+    }
+
+
+def _trial_in(data: dict[str, object]) -> Trial:
+    """Rebuild a measured candidate from JSON."""
+    known = {f.name for f in fields(HarnessConfig)}
+    config = {
+        str(k): v
+        for k, v in dict(data["config"]).items()
+        if str(k) in known  # type: ignore[arg-type]
+    }
+    scores = tuple(
+        ExampleScore(**s)  # type: ignore[misc]
+        for s in data.get("scores", [])
+        if isinstance(s, dict)
+    )
+    return Trial(
+        config=HarnessConfig(**config),  # type: ignore[arg-type]
+        scores=scores,
+        latency_ms=float(data.get("latency_ms") or 0.0),  # type: ignore[arg-type]
+        cost_usd=float(data.get("cost_usd") or 0.0),  # type: ignore[arg-type]
+        reasons=tuple(str(r) for r in data.get("reasons", [])),  # type: ignore[union-attr]
+    )
+
+
+class Store:
+    """Systems and runs, optionally surviving the process that made them.
+
+    In-memory by default, which is what the tests want. Given a `db_path` it writes
+    through to SQLite on every change and reads back on construction, so a restart no
+    longer loses the index. SQLite is in the standard library, needs no service, and
+    runs on one laptop, which is what a self-hoster has.
+    """
+
+    def __init__(self, *, db_path: Path | None = None) -> None:
+        """Start empty, or from disk when a database is given."""
         self._systems: dict[str, SystemRecord] = {}
         self._runs: dict[str, RunRecord] = {}
+        self._seq = 0
+        self._db: sqlite3.Connection | None = None
+        if db_path is not None:
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._db = sqlite3.connect(str(db_path), check_same_thread=False)
+            self._db.executescript(_SCHEMA)
+            self._read_back()
+
+    # --- persistence -----------------------------------------------------
+
+    def _read_back(self) -> None:
+        """Load every record. Called once, at construction."""
+        if self._db is None:
+            return
+        for row in self._db.execute(
+            "SELECT id, task, task_name, phase, examples, winner, report FROM systems"
+        ):
+            sid, task, task_name, phase, examples, winner, report = row
+            restored = tuple(
+                TaskExample(
+                    text=str(e["text"]), outcome=_outcome_in(task_name, e["outcome"])
+                )
+                for e in json.loads(examples)
+            )
+            parsed = _trial_in(json.loads(winner)) if winner else None
+            if phase == Phase.COMPILED and parsed is not None:
+                self._systems[sid] = CompiledSystem(
+                    id=sid,
+                    task=task,
+                    task_name=task_name,
+                    examples=restored,
+                    winner=parsed,
+                    report=report or "",
+                )
+            elif phase == Phase.EVAL_APPROVED:
+                self._systems[sid] = ApprovedSystem(
+                    id=sid, task=task, task_name=task_name, examples=restored
+                )
+            else:
+                self._systems[sid] = DraftSystem(
+                    id=sid, task=task, task_name=task_name, examples=restored
+                )
+        for row in self._db.execute(
+            "SELECT id, system_id, status, quick, model, report, winner, error, seq "
+            "FROM runs ORDER BY seq"
+        ):
+            rid, sid, status, quick, model, report, winner, error, seq = row
+            self._runs[rid] = RunRecord(
+                id=rid,
+                system_id=sid,
+                status=RunStatus(status),
+                quick=bool(quick),
+                model=model or "",
+                report=report,
+                winner=_trial_in(json.loads(winner)) if winner else None,
+                error=error,
+            )
+            self._seq = max(self._seq, int(seq) + 1)
+
+    def _write_system(self, record: SystemRecord) -> None:
+        """Write one System through to the database."""
+        if self._db is None:
+            return
+        winner = (
+            json.dumps(_trial_out(record.winner))
+            if isinstance(record, CompiledSystem)
+            else None
+        )
+        report = record.report if isinstance(record, CompiledSystem) else None
+        with self._db:
+            self._db.execute(
+                "INSERT OR REPLACE INTO systems "
+                "(id, task, task_name, phase, examples, winner, report) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    record.id,
+                    record.task,
+                    record.task_name,
+                    str(phase_of(record)),
+                    json.dumps(
+                        [
+                            {"text": e.text, "outcome": _outcome_out(e.outcome)}
+                            for e in record.examples
+                        ]
+                    ),
+                    winner,
+                    report,
+                ),
+            )
+
+    def _write_run(self, run: RunRecord) -> None:
+        """Write one run through to the database."""
+        if self._db is None:
+            return
+        with self._db:
+            self._db.execute(
+                "INSERT OR REPLACE INTO runs "
+                "(id, system_id, status, quick, model, report, winner, error, seq) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run.id,
+                    run.system_id,
+                    str(run.status),
+                    int(run.quick),
+                    run.model,
+                    run.report,
+                    json.dumps(_trial_out(run.winner)) if run.winner else None,
+                    run.error,
+                    self._seq,
+                ),
+            )
+        self._seq += 1
+
+    # --- the interface ----------------------------------------------------
 
     def create(
         self,
@@ -126,6 +333,7 @@ class Store:
             examples=examples,
         )
         self._systems[record.id] = record
+        self._write_system(record)
         return record
 
     def get_system(self, system_id: str) -> SystemRecord:
@@ -135,6 +343,16 @@ class Store:
             msg = f"system not found: {system_id}"
             raise NotFoundError(message=msg)
         return record
+
+    def list_systems(self) -> tuple[SystemRecord, ...]:
+        """Every System, newest last.
+
+        The catalog cannot be built on an API that cannot enumerate its own Systems, so
+        this is the floor under ranked listings, and it is also how a user finds what
+        they built yesterday. Insertion order is preserved by the dict and by the run
+        sequence, so the order is creation order.
+        """
+        return tuple(self._systems.values())
 
     def get_run(self, run_id: str) -> RunRecord:
         """Return a run or raise NotFoundError."""
@@ -153,6 +371,7 @@ class Store:
                     id=sid, task=task, task_name=task_name, examples=examples
                 )
                 self._systems[sid] = approved
+                self._write_system(approved)
                 return approved
             case ApprovedSystem() | CompiledSystem():
                 return current
@@ -196,6 +415,7 @@ class Store:
             model=model,
         )
         self._runs[run.id] = run
+        self._write_run(run)
         return run
 
     def succeed_run(self, run_id: str, report: CompileReport) -> RunRecord:
@@ -211,7 +431,7 @@ class Store:
         )
         self._runs[run_id] = done
         current = self.get_system(run.system_id)
-        self._systems[run.system_id] = CompiledSystem(
+        compiled = CompiledSystem(
             id=current.id,
             task=current.task,
             task_name=current.task_name,
@@ -219,6 +439,12 @@ class Store:
             winner=report.winner,
             report=text,
         )
+        self._systems[run.system_id] = compiled
+        # Written on compile, not on deploy. A System that was compiled and never
+        # deployed used to exist only in RAM, so closing the laptop lost it with no
+        # restart involved; the deploy route was the only writer.
+        self._write_system(compiled)
+        self._write_run(done)
         return done
 
     def fail_run(self, run_id: str, error: str) -> RunRecord:
@@ -226,4 +452,5 @@ class Store:
         run = self.get_run(run_id)
         failed = replace(run, status=RunStatus.FAILED, error=error)
         self._runs[run_id] = failed
+        self._write_run(failed)
         return failed

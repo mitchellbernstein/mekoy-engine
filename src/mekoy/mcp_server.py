@@ -29,13 +29,14 @@ from mekoy.outcome import RestaurantOutcome
 from mekoy.report import render_markdown
 from mekoy.runtime import Completer, OllamaCompleter
 from mekoy.search import Trial
+from mekoy.tasks import task_for_path
 from mekoy.verify import CHECKS_SUMMARY, VerifyFail, VerifyOk, explain
 
 type Json = dict[str, object]
 _PROTOCOL, _STAMP, _URL, _MODEL = "2024-11-05", ".eval-approved", "http://127.0.0.1:11434/v1", "qwen2.5:7b"
 _LOCK = "eval is not approved; call propose_eval with approve=true"
 _SCHEMA_FIELDS = " ".join(RestaurantOutcome.model_fields)
-#: Ask only for what the examples and the job did not already say.
+#: PLAN §155: ask only for what the examples and job did not already say.
 _INTAKE = (
     "intake (skip anything you already told me):",
     "  1. what counts as unacceptable, versus merely wrong?",
@@ -128,6 +129,9 @@ def _stamp(examples: Path) -> Path:
 class _Record:
     examples: Path
     job: str
+    #: Which task class the compile ran. The schema, gate, and scorer all hang off it,
+    #: so a reloaded System has to carry it or it is not the same System.
+    task_name: str = "restaurant"
     report: str | None = None
     config: HarnessConfig | None = None
     trial: Trial | None = None
@@ -222,18 +226,23 @@ class Server:
         examples = _path(args)
         if not _stamp(examples).is_file():
             _die(_LOCK)
+        # The task decides the schema, the gate, and the scorer. Compiling without it
+        # ran the connector against the default task, so the setup behind the measured
+        # result was not the one the connector exercised.
+        task = task_for_path(examples)
         split = split_examples(load_examples(examples))
         space = (
             SearchSpace.single()
             if args.get("quick") is True
-            else SearchSpace.local(train_n=len(split.train))
+            else SearchSpace.for_task(task, train_n=len(split.train))
         )
-        rec = self._systems.setdefault(str(examples), _Record(examples, ""))
+        rec = self._systems.setdefault(str(examples), _Record(examples, "", task.name))
         compiled = compile_system(
             self._lm(args),
             split,
             space,
             Budget(trials=_arg_int(args, "trials", 5)),
+            task=task,
         )
         rec.report = format_report(compiled)
         rec.config = compiled.winner.config
@@ -291,8 +300,23 @@ class Server:
         )
 
     def _invoke(self, args: Json) -> str:
-        """Extract one document, replaying the compiled winner's harness."""
-        winner = (self._systems.get(str(_path(args))) or _Record(_path(args), "")).config
+        """Extract one document, replaying the compiled winner's harness.
+
+        The harness is the System. Running a document through a default harness and
+        returning the answer silently gives the caller something that is not the System
+        they compiled, and it looks like it worked - so a missing winner is refused
+        rather than substituted. A caller who genuinely wants a one-off extraction can
+        say so by passing `k_shot` and `retries` themselves.
+        """
+        record = self._systems.get(str(_path(args)))
+        winner = record.config if record is not None else None
+        stated = _arg_int(args, "k_shot", -1) >= 0 or isinstance(args.get("retries"), int)
+        if winner is None and not stated:
+            _die(
+                f"no compiled System for {_path(args)} in this session, and the "
+                "harness is part of the System. Call compile_system first, or pass "
+                "k_shot and retries yourself to extract with an explicit harness."
+            )
         shots: tuple[tuple[str, RestaurantOutcome], ...] = ()
         k_shot = _arg_int(args, "k_shot", -1)
         if k_shot < 0 and winner is not None:

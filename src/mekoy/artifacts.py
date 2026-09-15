@@ -1,6 +1,6 @@
 """Where a downloadable bundle is written.
 
-Object storage would need a hosted bucket, which needs an account, so what
+PLAN §41.17 asks for object storage. A hosted bucket needs an account, so what
 ships is the half that does not: a tiny store protocol with a filesystem backend,
 which is what the local control plane needs and what the tests can exercise.
 
@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from mekoy.bundle import write_bundle
+from mekoy.dataset import TaskExample
 from mekoy.errors import CompileError
 from mekoy.spec import SystemSpec
 
@@ -71,7 +72,12 @@ def store_from_env() -> ArtifactStore:
 
 
 def write_bundle_to(
-    store: ArtifactStore, system_id: str, spec: SystemSpec, report_text: str
+    store: ArtifactStore,
+    system_id: str,
+    spec: SystemSpec,
+    report_text: str,
+    *,
+    examples: tuple[TaskExample, ...] = (),
 ) -> Path:
     """Write a bundle through the store, guarding the path it resolves to."""
     target = Path(store.locator(system_id)).resolve()
@@ -79,4 +85,4 @@ def write_bundle_to(
     if root not in target.parents:
         msg = f"refusing to write a bundle outside {root}: {target}"
         raise CompileError(message=msg)
-    return write_bundle(target, spec, report_text)
+    return write_bundle(target, spec, report_text, examples=examples)

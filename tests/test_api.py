@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
+import mekoy.api.main as api_main
 from mekoy.api.main import create_app
 from mekoy.api.models import (
     EvalResponse,
@@ -226,7 +227,7 @@ def _compiled(client: TestClient, rows: tuple[ExampleRecord, ...]) -> str:
 def test_get_system_reports_phase_and_latest_run(
     client: TestClient, rows: tuple[ExampleRecord, ...]
 ) -> None:
-    """GET /v1/systems/:id exists; a client needs it to poll by System."""
+    """PLAN 23 declares GET /v1/systems/:id; a client needs it to poll by System."""
     created = _parse(
         client.post("/v1/systems", json=_payload(rows)).content, SystemCreated
     )
@@ -300,7 +301,7 @@ def test_compare_requires_two_comparable_systems(
 def test_openai_compatible_invoke(
     client: TestClient, rows: tuple[ExampleRecord, ...]
 ) -> None:
-    """Invoke is reachable at /v1/chat/completions too."""
+    """PLAN 23: invoke is reachable at /v1/chat/completions too."""
     system_id = _compiled(client, rows)
     response = client.post(
         "/v1/chat/completions",
@@ -332,7 +333,7 @@ def test_openai_compatible_invoke_rejects_a_bad_gate(
 
 
 def test_the_declared_api_surface_is_complete(client: TestClient) -> None:
-    """Every declared API route must exist."""
+    """Every Phase-I route PLAN 23 declares must exist."""
     paths = client.get("/openapi.json").json()["paths"]
     for declared in (
         "/v1/systems",
@@ -532,3 +533,53 @@ class _ReceiptEcho:
             if row["text"] == tail:
                 return json.dumps(row["receipt"])
         return "{}"
+
+
+def _row() -> dict:
+    """One labeled example row, shaped the way the API expects."""
+    return {
+        "text": "Uchi, table for 2 Friday 7pm under Maya.",
+        "outcome": {
+            "restaurant": "Uchi",
+            "intent": "reservation",
+            "status": "confirmed",
+            "party_size": 2,
+            "when": "Friday 7pm",
+            "under_name": "Maya",
+            "evidence": "table for 2 Friday 7pm under Maya",
+            "booked": True,
+        },
+    }
+
+
+def test_a_run_is_never_left_running(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every exit from a compile has to resolve the run.
+
+    A run left in `running` is worse than a failed one: the caller cannot tell a slow
+    compile from a dead one, and nothing will ever move it. A dead model server was
+    already covered, because `ModelUnreachableError` is a `CompileError` - what was not
+    covered is anything else, and an unexpected exception is exactly when a run is most
+    likely to be abandoned.
+    """
+
+    def explode(*_args: object, **_kwargs: object) -> None:
+        msg = "something nobody planned for"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(api_main, "compile_system", explode)
+
+    application = api_main.create_app()
+    client = TestClient(application, raise_server_exceptions=False)
+    created = client.post(
+        "/v1/systems", json={"task": "job", "examples": [_row(), _row(), _row()]}
+    ).json()
+    sid = created["id"]
+    _ = client.post(f"/v1/systems/{sid}/evals", json={"approve": True})
+
+    response = client.post(f"/v1/systems/{sid}/compile", json={"quick": True})
+    assert response.status_code >= 500
+
+    run = client.get(f"/v1/systems/{sid}").json()["run"]
+    assert run is not None, "the run disappeared"
+    assert run["status"] == "failed", f"run left as {run['status']!r}"
+    assert "RuntimeError" in (run.get("error") or "")

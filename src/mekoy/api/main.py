@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Annotated, assert_never
 
 from fastapi import APIRouter, Depends, FastAPI, Request
@@ -34,6 +35,7 @@ from mekoy.api.models import (
     RunResponse,
     SystemCreated,
     SystemDetail,
+    SystemListResponse,
     run_out,
     system_out,
 )
@@ -187,10 +189,18 @@ def compile_endpoint(
         else SearchSpace.for_task(task, train_n=len(split.train))
     )
     completer = _completer(ctx, model=body.model, base_url=body.base_url)
+    # Every exit from here has to resolve the run. A run left in `running` is worse than
+    # a failed one: the caller cannot tell a slow compile from a dead one, and nothing
+    # will ever move it. `ModelUnreachableError` is a `CompileError`, so a dead model
+    # server was already recorded; what was not was anything else - a bug, a bad value,
+    # an unexpected exception - which left the run open forever.
     try:
         report = compile_system(completer, split, space, task=task)
     except CompileError as exc:
         _ = ctx.store.fail_run(run.id, exc.message)
+        raise
+    except BaseException as exc:
+        _ = ctx.store.fail_run(run.id, f"{type(exc).__name__}: {exc}")
         raise
     done = ctx.store.succeed_run(run.id, report)
     return run_out(done)
@@ -243,6 +253,31 @@ def invoke_system(
             assert_never(unreachable)
 
 
+@_router.get("/v1/systems", tags=["systems"])
+def list_systems(ctx: Annotated[AppContext, Depends(get_ctx)]) -> SystemListResponse:
+    """Every System this control plane knows about.
+
+    A catalog cannot be built on an API that cannot enumerate its own Systems, and a
+    user cannot find what they built yesterday without it.
+    """
+    records = ctx.store.list_systems()
+    return SystemListResponse(
+        systems=tuple(
+            SystemDetail(
+                id=record.id,
+                task=record.task,
+                task_name=record.task_name,
+                phase=phase_of(record),
+                n_examples=len(record.examples),
+                run=run_out(latest) if latest is not None else None,
+            )
+            for record in records
+            for latest in (ctx.store.latest_run(record.id),)
+        ),
+        n=len(records),
+    )
+
+
 @_router.get("/v1/systems/{system_id}", tags=["systems"])
 def get_system(
     system_id: str,
@@ -283,7 +318,7 @@ def deploy_system(
 ) -> DeployResponse:
     """Write a downloadable bundle, or refuse hosting.
 
-    A System can be hosted, self-hosted, or downloaded. Hosting is not part of the
+    PLAN 23 declares hosted, self_host, and download. Hosting is not part of the
     local MVP, so those two modes say so rather than pretending. `download` writes
     spec.json, report.txt, README.md, and docker-compose.yml next to the run.
     """
@@ -304,7 +339,13 @@ def deploy_system(
         stopped_early=False,
     )
     spec = spec_for(compiled, task=record.task, model_id=body.model)
-    out = write_bundle_to(ctx.artifacts, system_id, spec, latest.report)
+    out = write_bundle_to(
+        ctx.artifacts,
+        system_id,
+        spec,
+        latest.report,
+        examples=record.examples,
+    )
     return DeployResponse(
         mode=body.mode,
         detail="bundle written: spec.json, report.txt, README.md, docker-compose.yml",
@@ -354,7 +395,7 @@ def chat_completions(
 ) -> ChatCompletionResponse:
     """OpenAI-compatible invoke. `model` names the System, not a base model.
 
-    Invoke is reachable this way so an existing OpenAI client
+    PLAN 23 calls for invoke to be reachable this way so an existing OpenAI client
     can point at a System without new code. The last user message is the document.
     """
     record = ctx.store.require_compiled(body.model)
@@ -418,9 +459,20 @@ def _register_errors(application: FastAPI) -> None:
         return JSONResponse({"detail": exc.message}, status_code=400)
 
 
+def _default_db_path() -> Path | None:
+    """Where to keep the index, or None to stay in memory.
+
+    In-memory is the honest default for a test harness and for a one-shot run. A server
+    that is meant to keep what it built sets `MEKOY_DB`, and then a restart is a
+    nothing event rather than a wipe.
+    """
+    raw = os.environ.get("MEKOY_DB", "").strip()
+    return Path(raw).expanduser() if raw else None
+
+
 def create_app(*, completer: Completer | None = None) -> FastAPI:
-    """Build an app with its own in-memory store."""
-    ctx = AppContext(store=Store(), completer=completer)
+    """Build an app with its own store, persisted when MEKOY_DB names a file."""
+    ctx = AppContext(store=Store(db_path=_default_db_path()), completer=completer)
     # Auth is mounted before CORS so CORS ends up outermost: a 401 still needs
     # CORS headers or a browser reports it as a network failure.
     application = FastAPI(
