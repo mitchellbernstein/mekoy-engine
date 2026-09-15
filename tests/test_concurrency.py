@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from mekoy.dataset import load_examples, split_examples
-from mekoy.doctor import Finding, check, render
+from mekoy.doctor import Finding, ModelShape, _shape_from_info, check, render
 from mekoy.outcome import RestaurantOutcome
 from mekoy.search import HarnessConfig, _concurrency, evaluate
 from mekoy.tasks import RESTAURANT
@@ -110,6 +110,63 @@ def test_doctor_is_quiet_when_the_server_keeps_up(
     monkeypatch.setenv("MEKOY_CONCURRENCY", "4")
     assert not [f for f in check() if f.is_problem]
     assert "nothing is slowing" in render(check())
+
+
+def test_kv_cache_memory_follows_the_formula() -> None:
+    """`layers x KV heads x head dim x 2 x bytes`, checked against a known model.
+
+    A wrong number here silently decides how many requests the machine runs at once, so
+    it is pinned: qwen2.5-7b is 28 layers, 4 KV heads, head dim 128, two bytes per
+    value, which is 28 x 4 x 128 x 2 x 2 = 57,344 bytes, or 56 KB per token.
+    """
+    shape = ModelShape(
+        name="qwen2.5:7b",
+        layers=28,
+        kv_heads=4,
+        head_dim=128,
+        context=32768,
+    )
+    assert shape.kv_bytes_per_token == 57_344
+    assert shape.kv_bytes(tokens=1024, width=1) == 57_344 * 1024
+    assert shape.kv_bytes(tokens=1024, width=4) == 57_344 * 1024 * 4
+
+
+def test_a_full_context_costs_more_than_the_engine_needs() -> None:
+    """Reserving 32K when the engine uses a few thousand is the trap this guards.
+
+    The same model at the same width costs four times the KV memory at 32K context as at
+    8K, which is the difference between fitting on a laptop and not.
+    """
+    shape = ModelShape(name="m", layers=28, kv_heads=4, head_dim=128, context=32768)
+    small = shape.kv_bytes(tokens=8192, width=4)
+    large = shape.kv_bytes(tokens=32768, width=4)
+    assert large == small * 4
+    assert small / 1e9 < 2.0
+    assert large / 1e9 > 7.0
+
+
+def test_head_dim_comes_from_embedding_over_heads() -> None:
+    """The server reports embedding length and head count, not head dimension."""
+    shape = _shape_from_info(
+        "m",
+        {
+            "qwen2.block_count": 28,
+            "qwen2.attention.head_count": 28,
+            "qwen2.attention.head_count_kv": 4,
+            "qwen2.embedding_length": 3584,
+            "qwen2.context_length": 32768,
+        },
+    )
+    assert shape is not None
+    assert shape.head_dim == 3584 // 28 == 128
+    assert shape.layers == 28
+    assert shape.kv_heads == 4
+
+
+def test_an_unreadable_model_shape_is_reported_not_guessed() -> None:
+    """A made-up shape would make the memory plan a fiction."""
+    assert _shape_from_info("m", {}) is None
+    assert _shape_from_info("m", {"qwen2.block_count": 28}) is None
 
 
 def test_a_finding_without_advice_is_not_a_problem() -> None:

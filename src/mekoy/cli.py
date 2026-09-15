@@ -22,7 +22,7 @@ from mekoy.compare import compare_cards, format_comparison
 from mekoy.compile import Budget, SearchSpace, compile_system, format_report
 from mekoy.cord import load_cord
 from mekoy.dataset import load_examples, load_task_examples, split_examples
-from mekoy.doctor import check, render
+from mekoy.doctor import check, probe, render
 from mekoy.errors import CompileError, ModelUnreachableError
 from mekoy.evalgen import audit, expand_scenarios
 from mekoy.harness import extract
@@ -559,9 +559,19 @@ def _require_eval(examples: Path) -> None:
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    measure: bool = False,
+) -> None:
     """Check the local setup and say what is slowing it down."""
     typer.echo(render(check()))
+    if measure:
+        typer.echo("\nmeasuring concurrency on this machine (a few dozen short calls):")
+        result = probe()
+        typer.echo(
+            f"  {result.explain()}"
+            if result
+            else "  could not measure; is the server up?"
+        )
 
 
 def main() -> None:

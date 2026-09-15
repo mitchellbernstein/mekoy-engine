@@ -634,6 +634,7 @@ def reflect(  # noqa: PLR0913, PLR0915, C901 - the loop is the algorithm
     target: float | None = None,
     seed: int = 0,
     allow_knowledge_gap: bool = False,
+    advisor: Completer | None = None,
 ) -> ReflectionResult:
     """Evolve the task's instruction against the task's own gate.
 
@@ -736,7 +737,15 @@ def reflect(  # noqa: PLR0913, PLR0915, C901 - the loop is the algorithm
             stopped = shape.explain()
             break
 
-        reply = completer.complete(
+        # The writer is the model asked to diagnose and rewrite. It defaults to the
+        # model under test, but it does not have to be: this call happens once per
+        # compile, while inference happens once per document, forever. Spending a
+        # stronger model here buys a System that runs on a cheap one, which is the
+        # whole trade the compiler exists to make. Measured reason to allow it — a 7B
+        # writer produced rewrites that scored identically to the baseline (0.625 to
+        # 0.625) on BANKING77, so the ceiling on reflection quality was the writer.
+        writer = advisor or completer
+        reply = writer.complete(
             system=task.prompt,
             user=diagnose_prompt(parent, failures),
             constrained=False,
