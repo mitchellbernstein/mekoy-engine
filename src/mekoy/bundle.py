@@ -145,16 +145,21 @@ def write_bundle(  # noqa: PLR0913 - a bundle names each artefact it writes
     report_text: str,
     *,
     examples: tuple[TaskExample, ...] = (),
+    shots: tuple[TaskExample, ...] = (),
     holdout: tuple[TaskExample, ...] = (),
     run_log: str = "",
     environment: dict[str, object] | None = None,
 ) -> Path:
     """Write everything a recipient needs to run and check the System.
 
-    A harness that shows examples needs those examples to be the same harness. Writing a
-    bundle that says `k_shot=4` while shipping none of them would produce a different
-    System and report it under this one's score, so that combination is refused rather
-    than written.
+    A harness that shows examples needs those examples to be the same harness, and it
+    needs them to be the same *rows*. `examples` is everything the compile was given;
+    `shots` is the subset the harness actually shows, which is not the same thing. The
+    compile scores its test split with `shots=split.train`, so the head of the TRAINING
+    split is what the model saw, and the split is hash-dealt, so that is not the head of
+    the file. Shipping the corpus and letting a reader take its first `k_shot` rows made
+    a bundle whose own verification scored a different System: one row in eight in
+    common on the restaurant corpus.
     """
     if spec.k_shot > 0 and not examples:
         msg = (
@@ -176,6 +181,13 @@ def write_bundle(  # noqa: PLR0913 - a bundle names each artefact it writes
         _ = (directory / "examples.jsonl").write_text(
             _examples_text(examples), encoding="utf-8"
         )
+    if shots:
+        # Exactly the rows the harness shows, not the pool they were drawn from. A file
+        # holding the whole training split would make a reader slice it themselves, and
+        # slicing it wrongly is how this bundle verified as a different System.
+        _ = (directory / "shots.jsonl").write_text(
+            _examples_text(shots[: spec.k_shot]), encoding="utf-8"
+        )
     # The held-out rows are what make the advertised score checkable rather than
     # asserted. Without them a recipient has our number and no way to test it, which is
     # the difference between evidence and a claim.
@@ -194,6 +206,34 @@ def write_bundle(  # noqa: PLR0913 - a bundle names each artefact it writes
         _readme(spec, has_examples=bool(examples)), encoding="utf-8"
     )
     return directory
+
+
+def read_shots(directory: Path) -> tuple[TaskExample, ...]:
+    """The rows this System's harness shows, as recorded at export.
+
+    Returns empty when the bundle predates the file, which a reader must treat as
+    "cannot verify" rather than "shows nothing": the harness showed something, and not
+    knowing what is not the same as knowing it showed nothing.
+    """
+    return _read_rows(directory / "shots.jsonl")
+
+
+def _read_rows(path: Path) -> tuple[TaskExample, ...]:
+    """Read a JSON Lines fixture into examples."""
+    if not path.is_file():
+        return ()
+    rows: list[TaskExample] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        text = payload.get("text")
+        if isinstance(text, str):
+            rows.append(TaskExample(text=text, outcome=payload.get("outcome")))
+    return tuple(rows)
 
 
 def _compose() -> str:
@@ -269,11 +309,14 @@ def _readme(spec: SystemSpec, *, has_examples: bool) -> str:
         f"## What is in here\n\n"
         f"- `brief.md` — the job, the fields, and what was measured.\n"
         f"- `checks.md` — what an answer has to satisfy before it is accepted.\n"
-        f"- `examples.jsonl` — the labeled rows the harness shows, if any.\n"
+        f"- `examples.jsonl` — every labeled row the compile was given.\n"
+        f"- `shots.jsonl` — the rows the harness shows, which is what the score was\n"
+        f"  measured using. A verifier needs these, not a guess at them.\n"
         f"- `spec.json` — schema, SLOs, ownership flags, the harness knobs, and\n"
         f"  `spec_version`.\n"
         f"- `report.txt` — the compile card: what was tried and what it scored.\n"
-        f"- `holdout.jsonl` — the held-out rows the advertised score was measured on.\n"
+        f"- `holdout.jsonl` — the held-out rows the advertised score was measured\n"
+        f"  on.\n"
         f"- `run-log.txt` — what the search tried, in order.\n"
         f"- `environment.json` — the model, server, and seed behind the number.\n"
         f"- `docker-compose.yml` — the model server.\n"

@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from mekoy.bundle import write_bundle
+from mekoy.bundle import read_shots, write_bundle
 from mekoy.dataset import TaskExample
 from mekoy.errors import CompileError
 from mekoy.spec import OwnershipFlags, Slos, SystemSpec, load_spec
@@ -129,3 +129,36 @@ def test_a_bundle_without_examples_says_so(tmp_path: Path) -> None:
     readme = (dest / "README.md").read_text(encoding="utf-8")
     assert "carries no examples" in readme
     assert not (dest / "examples.jsonl").exists()
+
+
+def test_a_bundle_records_the_rows_the_harness_actually_shows(tmp_path: Path) -> None:
+    """The rows the model saw are the head of the TRAIN split, not the head of the file.
+
+    A verifier that takes the first `k_shot` rows of the corpus is testing a different
+    System: on the restaurant corpus that guess shared one row in eight with the truth,
+    and it made a correct bundle reproduce as 0.913 against its own 0.923.
+    """
+    corpus = tuple(
+        TaskExample(text=f"row {i}", outcome={"merchant": str(i)}) for i in range(6)
+    )
+    # The compile shows these, drawn from a split whose order is not the file's order.
+    shown = (corpus[4], corpus[2], corpus[5])
+
+    spec = _spec().model_copy(update={"k_shot": len(shown)})
+    dest = write_bundle(
+        tmp_path / "sys", spec, "winner\n", examples=corpus, shots=shown
+    )
+
+    recorded = read_shots(dest)
+    assert [r.text for r in recorded] == [r.text for r in shown]
+    assert len(recorded) == len(shown), "exactly what the harness shows, not the pool"
+    assert [r.text for r in recorded] != [r.text for r in corpus[: len(shown)]]
+
+
+def test_verification_refuses_when_the_shots_were_never_recorded(
+    tmp_path: Path,
+) -> None:
+    """Not knowing which rows were shown is not the same as knowing none were."""
+    spec = _spec()
+    dest = write_bundle(tmp_path / "sys", spec, "winner\n", examples=_examples())
+    assert read_shots(dest) == (), "an older bundle records no shots"
