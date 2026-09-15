@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Compiler for owned AI systems — local extract-and-verify MVP"
 readme = "README.md"
 authors = [
-    { name = "Mitchell Bernstein", email = "mitchellbernstein@proton.me" }
+    { name = "Studio Yeehaw LLC" }
 ]
 requires-python = ">=3.12"
 dependencies = [

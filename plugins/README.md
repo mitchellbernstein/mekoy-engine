@@ -15,7 +15,8 @@ Required entry is `.codex-plugin/plugin.json`, not a root `plugin.json`.
 
 Docs: personal marketplace at `~/.agents/plugins/marketplace.json` plus plugin copy under `~/.codex/plugins/`. CLI: `codex plugin marketplace add <dir>`.
 
-Already wired on this machine. Restart the ChatGPT desktop app, open **Plugins**, pick the **Mitchell local** marketplace, install **Mekoy**.
+Once the marketplace is registered, restart the ChatGPT desktop app, open
+**Plugins**, pick your local marketplace, and install **Mekoy**.
 
 Do not use Plugin Creator to generate a new plugin. This folder is the plugin.
 

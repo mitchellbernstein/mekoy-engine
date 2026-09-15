@@ -1,6 +1,6 @@
 """Budgeted harness search with SLO gates and a Pareto winner rule.
 
-Staged ASHA with Pareto secondary (quality, $, latency), stopping on
+PLAN §15: staged ASHA with Pareto secondary (quality, $, latency), stopping on
 the SLO. This is the local, CPU-sized form of it: a candidate pool over
 {k-shot, retries, decode, prompt}, evaluated stage by stage, pruned on the hard
 gate, ranked on the Pareto front, and stopped the moment an SLO-clearing
@@ -48,15 +48,15 @@ _DEFAULT_TRIALS = 5
 _CONSENSUS_TEMPERATURE = 0.7
 #: Fields that decide the safety call, and therefore get voted on.
 _CLOSED_FIELDS = ("intent", "status", "party_size", "booked")
-#: Minibatch size for the first ASHA rung (16-32 is the useful band).
+#: Minibatch size for the first ASHA rung (PLAN §15.6: n=16-32).
 _MINIBATCH = 16
-#: Successive-halving prune factor (the ASHA eta).
+#: Successive-halving prune factor (PLAN §15.7: ASHA eta).
 _PRUNE_ETA = 2
 #: Below this many dev rows, staging costs more than it saves.
 _STAGING_FLOOR = 12
 _PHRASE_FIELDS = ("restaurant", "when", "under_name")
 #: Shots are the cheapest lever on quality, so the default space reaches higher
-#: than the old cap of 4. Shots are worth testing at 0 and 4; a 60-row train
+#: than the old cap of 4. PLAN §15.5 brackets shots at 0 and 4; a 60-row train
 #: slice can afford more.
 _MAX_K = 8
 _K_LADDER = (0, 2, 4, 8)
@@ -95,7 +95,7 @@ class HarnessConfig:
     #: default.
     schema: bool = False
     #: Which base model to run. Empty means the completer the caller supplied.
-    #: The search samples over open models, and `model` comes first in
+    #: PLAN 15.5 samples over three open models, and 41.9 names `model` first in
     #: the controller's axes, so a search that cannot change the model is missing
     #: its largest lever.
     model: str = ""
@@ -125,6 +125,24 @@ class Trial:
     cost_usd: float = 0.0
     #: Gate reasons seen on this candidate. Empty means nothing was rejected.
     reasons: tuple[str, ...] = ()
+
+    @property
+    def effort(self) -> int:
+        """Model calls one document costs, which is deterministic.
+
+        This exists because wall-clock latency must never decide a winner. Two
+        candidates that tie on quality and cost is the common case, not a rare one — a
+        harness at `k=0 r=1` and one at `k=2 r=0` both score the same on a job the model
+        already handles, and both cost nothing locally. Whatever broke that tie decided
+        the compile, and a measured millisecond is the worst possible tie-breaker: it
+        varies between runs on an idle machine and varies a great deal more when rows
+        are scored concurrently, because concurrent requests queue behind each other.
+
+        The number of calls a document costs is a property of the harness alone, so the
+        same spec compiles to the same System every time. Latency is still measured and
+        still reported, because a user wants to know it; it just does not get a vote.
+        """
+        return (1 + self.config.retries) * max(1, self.config.consistency)
 
     @property
     def quality(self) -> float:
@@ -302,9 +320,11 @@ def _completer_for(
 
 #: How many rows to score at once. The rows in a batch are independent, so this is a
 #: throughput knob and not an accuracy knob: results are collected in row order and a
-#: run at any width is identical to a run at width 1. It defaults to 4 because a local
-#: server left at its own default serves one request at a time, which is what makes a
-#: compile take half an hour. Set `MEKOY_CONCURRENCY=1` to force serial scoring.
+#: run at any width is identical to a run at width 1. It defaults to 4 because the usual
+#: local server serves one request at a time unless told otherwise, and a server is not
+#: the only limit — see the note in `evaluate` about bandwidth-bound hardware, which
+#: gains nothing from a wider pool. `mekoy doctor` prices the width against your RAM
+#: before you raise it. Set `MEKOY_CONCURRENCY=1` to force serial scoring.
 _DEFAULT_CONCURRENCY = 4
 
 
@@ -381,13 +401,18 @@ def evaluate(  # noqa: PLR0913 - the evaluation entry point names its knobs
             )
         return outcome, perf_counter() - start
 
-    # Rows are independent, so they are scored concurrently. This is the single
-    # largest speedup available to the engine and it costs no accuracy: results are
-    # collected in row order, so a run is byte-identical to the serial one. What it
-    # buys depends on the server — a model server that serves one request at a time is
-    # the reason a compile takes half an hour instead of ten minutes. Ollama serves
-    # one request at a time by default and needs `OLLAMA_NUM_PARALLEL` raised to match
-    # this width; measured on a local 7B, width 4 gave 2.8x throughput.
+    # Rows are independent, so they are scored concurrently. The results are collected
+    # in row order, so a run at any width produces the same scores as a run at width 1;
+    # this is a throughput knob and not an accuracy knob, and a test pins that.
+    #
+    # What it buys depends entirely on the hardware, and the two cases are worth telling
+    # apart because they look identical from here. A server that serves one request at
+    # a time is the reason a compile takes half an hour instead of ten minutes, and
+    # raising its slot count is the fix. But bandwidth-bound hardware gains nothing from
+    # extra slots: on this machine, going from serial to four slots moved a batch from
+    # 16.2s to 15.4s while per-document latency rose from 2.0s to 7.5s. Run
+    # `mekoy doctor --measure` to find out which machine you are on before spending
+    # memory on a width.
     width = min(_concurrency(), max(1, len(rows)))
     if width <= 1:
         results = [one(row) for row in rows]
@@ -486,15 +511,19 @@ def _modal(values: list[object]) -> object:
 
 
 def pareto_front(trials: tuple[Trial, ...]) -> tuple[Trial, ...]:
-    """Nondominated trials: nobody is better on quality, cost, and latency at once."""
+    """Nondominated trials: nobody is better on quality, cost, and effort at once.
+
+    Effort, not measured latency. See `Trial.effort` for why a timing cannot be allowed
+    to decide which System a compile produces.
+    """
     front: list[Trial] = []
     for a in trials:
         dominated = any(
             b.quality >= a.quality
             and b.cost_usd <= a.cost_usd
-            and b.latency_ms <= a.latency_ms
-            and (b.quality, -b.cost_usd, -b.latency_ms)
-            != (a.quality, -a.cost_usd, -a.latency_ms)
+            and b.effort <= a.effort
+            and (b.quality, -b.cost_usd, -b.effort)
+            != (a.quality, -a.cost_usd, -a.effort)
             for b in trials
         )
         if not dominated:
@@ -503,14 +532,16 @@ def pareto_front(trials: tuple[Trial, ...]) -> tuple[Trial, ...]:
 
 
 def pick(front: tuple[Trial, ...]) -> Trial:
-    """Winner from the Pareto front: quality first, then cheap, then fast.
+    """Winner from the Pareto front: quality first, then cheap, then less work.
 
-    Ties prefer the cheaper harness, then fewer shots, so a compile does not
-    spend k-shot tokens it does not need.
+    Ties prefer the cheaper harness, then the one that makes fewer calls per document,
+    then fewer shots. Every term is a property of the harness, so the same spec and the
+    same data compile to the same System — which is the claim the whole product rests on
+    and which a measured latency silently broke.
     """
     return max(
         front,
-        key=lambda t: (t.quality, -t.cost_usd, -t.latency_ms, -t.config.k_shot),
+        key=lambda t: (t.quality, -t.cost_usd, -t.effort, -t.config.k_shot),
     )
 
 
@@ -520,7 +551,7 @@ def _rung_size(dev: tuple[ExampleRecord, ...]) -> int:
 
 
 def _prune_keep(n: int) -> int:
-    """How many candidates survive a rung (eta=2)."""
+    """How many candidates survive a rung (PLAN §15.7, eta=2)."""
     return max(1, n // _PRUNE_ETA)
 
 
@@ -540,7 +571,7 @@ def search(  # noqa: PLR0913 - the search entry point names its knobs
     Two rungs when the dev slice is big enough to afford one: every candidate is
     priced on a minibatch, then only survivors earn a full dev pass. Both loops
     check the SLO after each candidate, so a compile that has already won stops
-    instead of spending the rest of its budget.
+    instead of spending the rest of its budget (PLAN §15.12).
     """
     spend = budget or Budget()
     chosen = space.sample(spend.trials, seed=spend.seed)

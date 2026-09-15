@@ -16,6 +16,14 @@ visible from inside the engine:
 So the check computes both before recommending anything. The arithmetic is the formula
 from the model's own config — `layers x KV heads x head dimension x 2 for K and V x
 bytes per value` — which makes the recommendation a calculation rather than an opinion.
+
+There is a third thing, and `--measure` exists because of it: **a wider pool does not
+always buy speed.** On this machine, four slots moved a batch from 16.2s to 15.4s while
+per-document latency rose from 2.0s to 7.5s. That is time-slicing, not parallelism, and
+it is what memory-bandwidth-bound hardware does — the published 2.8x for this setting
+came from hardware with bandwidth to spare and did not reproduce here. Both outcomes are
+real, nothing in the server's configuration distinguishes them, and only a timing run
+settles which one a given machine is. So `probe` measures instead of quoting.
 """
 
 from __future__ import annotations
@@ -106,7 +114,7 @@ def _curl(path: str) -> object | None:
     if path.endswith("/show"):
         args += ["-d", json.dumps({"model": _configured_model()})]
     try:
-        response = subprocess.run(  # noqa: S603 - fixed argv, curl on PATH
+        response = subprocess.run(  # noqa: S603 - fixed argv, no shell
             args, capture_output=True, text=True, timeout=30, check=False
         )
         return json.loads(response.stdout)
@@ -457,27 +465,22 @@ def probe(*, width: int = 4, calls: int = 8, model: str | None = None) -> Probe 
     host = _base_url().rstrip("/")
 
     def one() -> None:
+        args = [
+            f"{host}/chat/completions",
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            json.dumps(
+                {
+                    "model": name,
+                    "messages": [{"role": "user", "content": "Say ok."}],
+                    "max_tokens": 4,
+                }
+            ),
+        ]
         with contextlib.suppress(OSError, subprocess.SubprocessError):
             subprocess.run(  # noqa: S603 - fixed argv, no shell
-                [  # noqa: S607 - curl is on PATH, not attacker-controlled
-                    "curl",
-                    "-sS",
-                    "-m",
-                    "120",
-                    "-o",
-                    "/dev/null",
-                    f"{host}/chat/completions",
-                    "-H",
-                    "Content-Type: application/json",
-                    "-d",
-                    json.dumps(
-                        {
-                            "model": name,
-                            "messages": [{"role": "user", "content": "Say ok."}],
-                            "max_tokens": 4,
-                        }
-                    ),
-                ],
+                ["curl", "-sS", "-m", "120", "-o", "/dev/null", *args],  # noqa: S607
                 capture_output=True,
                 timeout=180,
                 check=False,
