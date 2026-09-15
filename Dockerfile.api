@@ -28,6 +28,7 @@ RUN mkdir -p /data/artifacts
 
 EXPOSE 8080
 
-# One worker: the store is process-local, so more workers would mean more than one
-# copy of every System. Scaling this needs a shared object store, which is not built.
+# One worker. The index persists in SQLite (MEKOY_DB), so a second worker would no
+# longer lose Systems, but two processes writing one SQLite file is still the wrong
+# shape; a shared database is what would make more workers safe.
 CMD ["uvicorn", "mekoy.api.main:app", "--host", "0.0.0.0", "--port", "8080"]

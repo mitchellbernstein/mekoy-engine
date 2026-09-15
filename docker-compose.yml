@@ -1,0 +1,79 @@
+# The whole platform, on your own machine.
+#
+#   docker compose up -d
+#   open http://localhost:3001
+#
+# Three services because there are three runtimes: the control plane is Python, the
+# portal is Node, and the model server is Ollama. None of them requires an account, a
+# key, or a network. This is the self-host door: the same product that runs hosted runs
+# here, and nothing about it phones home.
+#
+# The control plane keeps its Systems in a named volume, so `docker compose down` does
+# not lose what you built. `docker compose down -v` does, and that is the only command
+# that does.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    environment:
+      # Compiles make hundreds of calls; reloading the model between them would
+      # dominate the run.
+      OLLAMA_KEEP_ALIVE: 60m
+    # On a machine with an NVIDIA GPU, uncomment to reserve it. Left off so the same
+    # file runs on a laptop: a hard reservation fails to start anywhere without the
+    # driver, and a CPU-only model still works, just slower.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    ports:
+      # The image listens on 8080 (see Dockerfile.api); the host side stays 8787 so the
+      # documented URL is unchanged.
+      - "8787:8080"
+    environment:
+      # Durable index. Without this the control plane keeps Systems in memory and a
+      # restart is a wipe.
+      MEKOY_DB: /data/mekoy.db
+      MEKOY_ARTIFACTS_DIR: /data/artifacts
+      # A container's 127.0.0.1 is the container, so the control plane has to be told
+      # where the model server actually is.
+      MEKOY_MODEL_BASE_URL: http://ollama:11434/v1
+      MEKOY_MODEL: qwen2.5:7b
+    volumes:
+      - control-plane:/data
+    depends_on:
+      - ollama
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      # 3001 on the host because 3000 is usually a dev server. The portal is told to
+      # expect 3001 too, or Next's dev-mode origin check drops its own assets.
+      - "3001:3000"
+    environment:
+      MEKOY_PORT: 3001
+      MEKOY_API_URL: http://api:8787
+      # The portal's chat runs on the local model. It needs no hosted key.
+      MEKOY_CHAT_BASE_URL: http://ollama:11434/v1
+      MEKOY_CHAT_API_KEY: ollama
+      MEKOY_CHAT_MODEL: qwen2.5:7b
+    depends_on:
+      - api
+
+volumes:
+  ollama:
+  control-plane:

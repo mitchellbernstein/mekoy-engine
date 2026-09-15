@@ -1,0 +1,12 @@
+# Without this the build context carries node_modules and the previous build output -
+# about 1.5 GB - and every layer COPY pays for them.
+node_modules
+.next
+.env
+.env.local
+.env.*.local
+npm-debug.log*
+*.tsbuildinfo
+next-env.d.ts
+.gradle
+.git
