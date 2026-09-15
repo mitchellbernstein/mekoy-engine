@@ -29,5 +29,5 @@ RUN mkdir -p /data/artifacts
 EXPOSE 8080
 
 # One worker: the store is process-local, so more workers would mean more than one
-# copy of every System. Scaling this needs the storage that PLAN 41.17 leaves open.
+# copy of every System. Scaling this needs a shared object store, which is not built.
 CMD ["uvicorn", "mekoy.api.main:app", "--host", "0.0.0.0", "--port", "8080"]

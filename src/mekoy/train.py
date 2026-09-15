@@ -1,7 +1,7 @@
 """Training: gated, optional, and only when the eval says the System is short.
 
-PLAN §15.10 is a rule, not an option: *"If below gate: one LoRA SFT rank 8-16, then
-GEPA-light on the adapter."* §41.12 asks for the job adapter. §15.8's report line
+Training is a rule, not an option: if the compiled System is below the gate, one
+LoRA SFT at rank 8-16 runs. The report line
 *"training: skipped"* is a first-class outcome, so the decision to train has to be
 derived from the measured result rather than picked by hand.
 
@@ -45,7 +45,7 @@ __all__ = [
 
 FIREWORKS_KEY_ENV = "FIREWORKS_API_KEY"
 FIREWORKS_LORA_URL = "https://api.fireworks.ai/inference/v1/lora"
-#: PLAN 15.10 fixes the rank band. Eight is the cheap end, which is what a
+#: The rank band is fixed at 8-16. Eight is the cheap end, which is what a
 #: 58-example corpus can support without memorising it.
 DEFAULT_RANK = 8
 DEFAULT_ITERS = 120
@@ -62,7 +62,7 @@ class LoRaBudget:
     def __post_init__(self) -> None:
         """Refuse a rank outside the plan's band rather than silently clamping."""
         if not 8 <= self.rank <= 16:  # noqa: PLR2004 - the band the plan fixes
-            msg = f"PLAN 15.10 fixes rank 8-16; got {self.rank}"
+            msg = f"rank 8-16 is the fixed band; got {self.rank}"
             raise CompileError(message=msg)
         if self.backend not in {"mlx", "fireworks"}:
             msg = f"unknown training backend: {self.backend!r}"
@@ -86,7 +86,7 @@ class TrainingPlan:
 
 
 def should_train(report: CompileReport, *, slos: Slos | None = None) -> bool:
-    """PLAN §15.10: train only when the compiled System is below the gate.
+    """Train only when the compiled System is below the gate.
 
     The gate is the declared SLO when there is one, and otherwise one field of
     headroom under what the search achieved. Training a System that already clears
@@ -290,7 +290,7 @@ def require_scratch_approval(*, approved: bool, provider: str) -> None:
 
 
 def require_fireworks_key() -> str:
-    """Return the key, or refuse. Gated, per PLAN 41.12."""
+    """Return the key, or refuse. Gated by an explicit opt-in."""
     key = os.environ.get(FIREWORKS_KEY_ENV, "").strip()
     if not key:
         msg = (

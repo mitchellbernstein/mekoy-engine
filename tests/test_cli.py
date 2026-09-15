@@ -51,7 +51,7 @@ def test_compile_without_eval_exits_1(
 def test_serve_runs_the_control_plane(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """PLAN 41.14 lists `serve`, and 41.13's server exists. It used to exit 2."""
+    """`serve` exists and the invoke server behind it exists. It used to exit 2."""
     called: dict[str, object] = {}
 
     def _fake_run(app_path: str, **kwargs: object) -> None:
@@ -73,7 +73,7 @@ def test_serve_warns_when_the_api_is_open(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_report_prints_the_compile_card(tmp_path: Path) -> None:
-    """PLAN 41.14 lists `report`; it was missing entirely."""
+    """`report` exists; it was missing entirely."""
     examples = _copy_examples(tmp_path)
     (tmp_path / "compile-report.txt").write_text("winner  k=0 r=1\n")
     result = _RUNNER.invoke(app, ["report", str(examples)])

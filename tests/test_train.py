@@ -54,7 +54,7 @@ def _report(rows: tuple[ExampleRecord, ...]) -> CompileReport:
 
 
 def test_the_rank_band_is_enforced_not_clamped() -> None:
-    """PLAN 15.10 fixes rank 8-16. A silent clamp would hide a bad config."""
+    """The rank band is 8-16. A silent clamp would hide a bad config."""
     with pytest.raises(CompileError, match="rank 8-16"):
         _ = LoRaBudget(rank=32)
 
@@ -65,7 +65,7 @@ def test_an_unknown_training_backend_is_refused() -> None:
 
 
 def test_training_is_skipped_when_the_gate_is_already_clear() -> None:
-    """PLAN 15.10 trains only when below the gate."""
+    """Training runs only when below the gate."""
     rows = load_examples(_FIXTURE)
     report = _report(rows)
     slos = Slos(quality=0.5, cost_per_doc=1.0, latency_ms=60_000)
@@ -151,7 +151,7 @@ def test_the_local_command_is_reproducible() -> None:
 def test_the_fireworks_adapter_refuses_without_a_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """PLAN 41.12 says gated. There is no credential on this machine, so this is
+    """Training is gated. There is no credential on this machine, so this is
     the only behaviour of it that can be verified here."""
     monkeypatch.delenv(FIREWORKS_KEY_ENV, raising=False)
     with pytest.raises(CompileError, match="cannot submit a job"):

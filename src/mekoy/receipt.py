@@ -1,7 +1,7 @@
 """Frozen receipt schema, numeric checks, and scoring.
 
-The second task class. `PLAN.md` §43 makes receipt extraction the first prototype
-and §16.1 puts deterministic numeric checks at the bottom of the eval stack:
+The second task class. Receipt extraction is the second prototype
+and deterministic numeric checks sit at the bottom of the eval stack:
 `qty * unit_price ≈ line_total`, `Σ line_total ≈ subtotal`, and
 `subtotal + tax ≈ total`. Those identities are why a receipt is the right first
 proof job — a model cannot bluff arithmetic.
@@ -221,7 +221,7 @@ def score_receipt(*, gold: Receipt, pred: Receipt) -> ReceiptScore:
 
     Header amounts compare with `EPSILON`, text fields casefold, and line items are
     matched one-to-one on amount with a fuzzy description, so reordering the lines
-    is not punished (PLAN §16.2).
+    is not punished.
     """
     header_hits = 0
     for field in TEXT_FIELDS:

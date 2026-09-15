@@ -1,6 +1,6 @@
 """Compile: search on dev, publish the test number.
 
-The winner is chosen from `dev` only (PLAN §16.5). `test` is scored once, after
+The winner is chosen from `dev` only. `test` is scored once, after
 selection, so the published number measures the System rather than the search.
 Training is not run on this path; that is a first-class outcome in the report.
 """

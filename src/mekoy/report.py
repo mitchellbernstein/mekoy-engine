@@ -1,6 +1,6 @@
 """Markdown compile report: winner, Pareto front, and every failed arm.
 
-PLAN §41.11. The plain-text card is for a terminal; this is the artifact that
+The plain-text card is for a terminal; this is the artifact that
 travels with a downloaded System, so it has to name the tradeoff rather than just
 the winner.
 """
@@ -68,7 +68,7 @@ def render_markdown(report: CompileReport, *, task: str = "") -> str:
             "",
             "## Notes",
             "",
-            "- `quality` normalizes free-text phrasing (PLAN §16.3); `strict` is raw",
+            "- `quality` normalizes free-text phrasing; `strict` is raw",
             "  string equality and is reported so the difference stays visible.",
             "- Arms with fewer rows than the winner were priced on a minibatch and",
             "  pruned before a full dev pass; they are excluded from the Pareto front.",

@@ -226,7 +226,7 @@ def _compiled(client: TestClient, rows: tuple[ExampleRecord, ...]) -> str:
 def test_get_system_reports_phase_and_latest_run(
     client: TestClient, rows: tuple[ExampleRecord, ...]
 ) -> None:
-    """PLAN 23 declares GET /v1/systems/:id; a client needs it to poll by System."""
+    """GET /v1/systems/:id exists; a client needs it to poll by System."""
     created = _parse(
         client.post("/v1/systems", json=_payload(rows)).content, SystemCreated
     )
@@ -300,7 +300,7 @@ def test_compare_requires_two_comparable_systems(
 def test_openai_compatible_invoke(
     client: TestClient, rows: tuple[ExampleRecord, ...]
 ) -> None:
-    """PLAN 23: invoke is reachable at /v1/chat/completions too."""
+    """Invoke is reachable at /v1/chat/completions too."""
     system_id = _compiled(client, rows)
     response = client.post(
         "/v1/chat/completions",
@@ -332,7 +332,7 @@ def test_openai_compatible_invoke_rejects_a_bad_gate(
 
 
 def test_the_declared_api_surface_is_complete(client: TestClient) -> None:
-    """Every Phase-I route PLAN 23 declares must exist."""
+    """Every declared API route must exist."""
     paths = client.get("/openapi.json").json()["paths"]
     for declared in (
         "/v1/systems",

@@ -1,6 +1,6 @@
 """Deterministic edge-case generator for the Bucko restaurant eval.
 
-PLAN §16.4 asks for generated cases: malformed input, missing fields, adversarial
+Generated cases cover malformed input, missing fields, adversarial
 cases. This builds them from a scenario table where the gold is known *by
 construction* — the transcript and its label are rendered from the same values,
 so a generated row cannot silently mislabel itself.

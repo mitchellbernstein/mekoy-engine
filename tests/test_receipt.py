@@ -103,7 +103,7 @@ def test_score_is_perfect_for_an_identical_receipt() -> None:
 
 
 def test_reordered_line_items_still_score() -> None:
-    """PLAN §16.2: line items are matched, not compared positionally."""
+    """Line items are matched, not compared positionally."""
     gold = _receipt()
     pred = _receipt(items=tuple(reversed(_ITEMS)))
     assert score_receipt(gold=gold, pred=pred).quality == pytest.approx(1.0)

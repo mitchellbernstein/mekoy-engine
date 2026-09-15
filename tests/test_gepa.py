@@ -16,7 +16,7 @@ from mekoy.tasks import BANKING77
 
 
 def test_the_metric_call_cap_sits_in_the_planned_band() -> None:
-    """PLAN 15.8 caps GEPA at 50-150 metric calls."""
+    """GEPA is capped at 50-150 metric calls."""
     assert 50 <= DEFAULT_METRIC_CALLS <= 150
 
 
@@ -77,7 +77,7 @@ def _pairs() -> tuple[tuple[str, object], ...]:
 
 
 def test_setting_both_budgets_is_refused_by_dspy() -> None:
-    """PLAN asks for auto and the cap together; dspy allows exactly one."""
+    """Auto and the cap are both wanted; dspy allows exactly one."""
     if not available():
         pytest.skip("dspy extra not installed")
     with pytest.raises(CompileError, match="exactly one"):

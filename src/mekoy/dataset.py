@@ -1,6 +1,6 @@
 """JSONL examples and the three-way split: train shots, dev select, test report.
 
-PLAN §16.5: user examples in the holdout are never used to pick a winner. The
+User examples in the holdout are never used to pick a winner. The
 search sees `train` and `dev` only. `test` is scored once, after selection.
 """
 

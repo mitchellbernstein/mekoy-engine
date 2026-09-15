@@ -9,7 +9,7 @@ from mekoy.errors import CompileError
 from mekoy.outcome import RestaurantOutcome
 from mekoy.spec import OwnershipFlags, Slos, SystemSpec, write_spec
 
-#: A downloaded System runs locally and can leave our hosts. PLAN §31.
+#: A downloaded System runs locally and can leave the machine that built it.
 _OWNED = OwnershipFlags(runtime_owned=True, downloadable=True)
 
 
@@ -58,7 +58,7 @@ def write_bundle(directory: Path, spec: SystemSpec, report_text: str) -> Path:
 def _compose(spec: SystemSpec) -> str:
     """Model server only.
 
-    PLAN §31 sets the self-host bar at "compose file works on a GPU box". The
+    The self-host bar is a compose file that works on a GPU box. The
     System is the harness, not the weights, so the bundle ships the server the
     harness calls and the spec that says which model it wants.
     """

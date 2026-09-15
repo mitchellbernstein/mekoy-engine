@@ -3,8 +3,12 @@
 import json
 from pathlib import Path
 
-import mlflow
 import pytest
+
+try:  # mlflow is an optional extra; the suite must collect without it
+    import mlflow
+except ImportError:  # pragma: no cover - present whenever the extra is installed
+    mlflow = None  # type: ignore[assignment]
 
 from mekoy.compile import Budget, CompileReport, SearchSpace, compile_system
 from mekoy.dataset import ExampleRecord, load_examples, split_examples

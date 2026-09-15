@@ -51,7 +51,7 @@ def test_split_is_three_way() -> None:
 
 
 def test_search_never_reads_the_test_split() -> None:
-    """PLAN §16.5: the search must not see the examples it is judged on."""
+    """The search must not see the examples it is judged on."""
     split = _split()
     completer = _GoldEcho((*split.train, *split.dev, *split.test))
     _winner, _tried, _stopped = search(
@@ -160,7 +160,7 @@ def test_unstaged_search_evaluates_every_candidate_fully() -> None:
 
 
 def test_slo_clearing_candidate_stops_the_search() -> None:
-    """PLAN §15.12: stop on the SLO, do not spend the rest of the budget."""
+    """Stop on the SLO; do not spend the rest of the budget."""
     split = _split()
     space = SearchSpace.local(train_n=len(split.train))
     report = compile_system(

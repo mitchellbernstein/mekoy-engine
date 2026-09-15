@@ -1,6 +1,6 @@
 """Experiment tracking: one record per compile, comparable across runs.
 
-PLAN §41.10 asks for MLflow, and the stack table lists it under Experiments. What
+MLflow is the experiments layer. What
 it buys is the thing a single report card cannot: comparing compiles over time and
 across task classes, which is what a catalog ranker would eventually read.
 

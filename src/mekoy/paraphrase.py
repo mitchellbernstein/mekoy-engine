@@ -1,6 +1,6 @@
 """Paraphrased eval cases: gold by construction, surface text by a local model.
 
-PLAN §41.19 asks for generated edge cases. The failure mode of model-generated
+Generated edge cases fill a gap. The failure mode of model-generated
 evals is that the model writes both the input and the label, so a mistake in the
 label is invisible. This inverts that: the *scenario* (and therefore the gold) is
 declared in code, and the model only writes the messy surface text.

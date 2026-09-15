@@ -1,5 +1,5 @@
 # A downloaded System: the model server plus the invoke path, no control plane.
-# PLAN §31 ships a self-host path; compose-on-a-GPU-box is the bar, not a VPC.
+# The self-host path is a compose file on a GPU box, not a VPC deployment.
 #
 #   docker build -t mekoy-system .
 #   docker run --rm -p 11434:11434 mekoy-system

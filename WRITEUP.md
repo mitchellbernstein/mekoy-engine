@@ -124,8 +124,8 @@ commands inside it, `ollama` 0.34.0 is present, and a container served
 `qwen2.5:1.5b` and extracted correctly in 10s.
 
 The download bundle had a worse defect: its README instructed `docker build -t
-system .` while the bundle shipped no Dockerfile. PLAN §31 sets the self-host bar
-at "compose file works on a GPU box", so the bundle now ships
+system .` while the bundle shipped no Dockerfile. The self-host bar is a compose
+file that works on a GPU box, so the bundle now ships
 `docker-compose.yml` instead. Its first version hard-reserved an NVIDIA device,
 which fails to start on any machine without that driver, so the reservation ships
 commented out. Verified by running the shipped bundle: `docker compose up -d`, pull,
@@ -190,9 +190,9 @@ running the shipped artifact rather than reading the code.
 `src/mekoy/receipt.py` defined a `Receipt` schema that **no other module imported**,
 and `examples/cord-receipt/` held 24 labeled receipts — including an 18-row
 OCR-noisy fixture — that nothing was scoring. The repo had drifted from receipts
-to restaurant calls and left the first prototype behind. PLAN §43 makes receipts
-the first proof job, and §16.1 puts deterministic numeric checks at the bottom of
-the eval stack, so this was both a gap and a free verification.
+to restaurant calls and left the first prototype behind. Receipts are the first
+proof job, and deterministic numeric checks sit at the bottom of the eval stack,
+so this was both a gap and a free verification.
 
 Rebuilt the deterministic layer:
 
@@ -215,7 +215,7 @@ examples/bucko-restaurant/combined.jsonl   271 rows: 270 support their label, 1 
 examples/cord-receipt/hard.jsonl            18 receipts: 18 arithmetically sound, 0 not
 ```
 
-Scoring for receipts follows §16.2: header text casefolds, money compares within
+Scoring for receipts: header text casefolds, money compares within
 `EPSILON`, and line items are matched one-to-one on amount with description
 agreement as a tiebreak, so reordering lines is not punished.
 
@@ -349,8 +349,8 @@ not close:
 | `k=8 r=0 grammar` | 0.664 | 0.688 |
 | `k=4 r=3 grammar` | 0.629 | 0.812 |
 
-PLAN §35 warns about exactly this: *"constrained decoding 'format tax' → always A/B
-unconstrained."* The A/B was built for that reason and it earned its place here.
+The warning worth testing is the constrained-decoding "format tax": always A/B
+unconstrained. The A/B was built for that reason and it earned its place here.
 Every grammar arm scored worse, and two of them also failed the gate more often.
 
 ## The third task class is classification, and the abstraction held
@@ -396,11 +396,11 @@ healthy and tests almost nothing. Round-robin interleaving fixed it: 616 rows,
 8 per intent, all 77 present. The same class of bug as the CORD box parser: a
 plausible-looking count hiding a broken sample.
 
-## GEPA-light, the plan's named optimiser
+## GEPA-light, the borrowed optimiser
 
-PLAN §15.8 stages reflection after the candidate pool: *"Survivors: GEPA auto=light,
-cap max_metric_calls 50-150, reflection LM = large open model."* §41.8 asks for the
-wrapper. It is built on DSPy **3.3.1** — the version the plan cites — as an optional
+Reflection is staged after the candidate pool: survivors get a light reflective
+pass capped at 50-150 metric calls, using a larger model as the reflection LM. The
+wrapper is built on DSPy **3.3.1** as an optional
 extra, because §35 warns that `spec.json` must stay loadable without DSPy.
 
 The integration decision that matters: **GEPA optimises against our metric, not
@@ -418,9 +418,9 @@ toward whatever a generic metric would prefer. The reflection LM is local for th
 same reason the task LM is: an instruction written by a closed API is closed-model
 output, which AGENTS.md bans from compile data.
 
-### Two places the plan and the library disagree
+### Two places the intent and the library disagree
 
-1. **`auto` and `max_metric_calls` cannot both be set.** PLAN §15.8 asks for
+1. **`auto` and `max_metric_calls` cannot both be set.** The intent was
    "auto=light, cap max_metric_calls 50-150". dspy raises: *"Exactly one of
    max_metric_calls, max_full_evals, auto must be set."* The cap is what bounds a
    compile, so the cap is the default and `auto` is opt-in. Setting both is now a
@@ -444,7 +444,7 @@ manufactures a delta from noise, and it took 4m9s cold.
 
 ## Stage 0: BootstrapFewShot, and an honest null result
 
-PLAN §15.4 puts BootstrapFewShot before any search over k-shot and decode. What
+BootstrapFewShot belongs before any search over k-shot and decode. What
 ships without it is "take the first *k* training rows", which is a sample rather
 than a selection: it cannot know whether a row teaches anything. `--bootstrap`
 adds a candidate whose demonstrations were chosen by tracing the program and
@@ -481,20 +481,20 @@ and it stops the pipeline from claiming that "first *k*" is a selection.
 
 ## The declared API surface, and a bug only a live call finds
 
-PLAN §23 lists a specific REST surface. Diffing it against the implementation found
-four Phase-I endpoints that were never built:
+The API has a declared REST surface. Diffing it against the implementation found
+four endpoints that were never built:
 
 ```
 GET  /v1/systems/:id              added
 GET  /v1/systems/:id/report       added
 POST /v1/systems/:id/deploy       added
 GET  /v1/systems/:id/compare      added
-POST /v1/chat/completions         added  (PLAN 23: "OpenAI-compat also")
+POST /v1/chat/completions         added  (so an OpenAI client works too)
 ```
 
 All of them are now implemented and covered by a test that reads `openapi.json` and
 asserts every declared route exists, so the surface cannot silently drift again.
-`POST /v1/run` is Phase III by the plan's own wording and is deliberately absent.
+`POST /v1/run` is a later-phase endpoint by intent and is deliberately absent.
 
 Verified against the running server, not only the test client:
 
@@ -552,7 +552,7 @@ interaction is not.
 
 ## The portal, driven end to end in a browser
 
-PLAN 24 calls the connector the primary UX, so it was driven for real: landing page,
+The connector is the primary way in, so it was driven for real: landing page,
 Open portal, the Systems table, New compile, a job description, and Submit. The
 flow now completes against the local stack with no closed-API key:
 
@@ -592,15 +592,15 @@ Three defects stood between the portal and that, and none of them showed up in
   warning in the log was the tell, and a `reactAttached` check on the DOM made it
   unambiguous. The portal was fine; my test harness was wrong.
 - **The Systems table is mock data.** The page says so in the UI — *"Three mock
-  Systems. Quality, cost, and latency are the report. No backend."* PLAN 23
+  Systems. Quality, cost, and latency are the report. No backend."* The API
   declares `POST /v1/systems` and `GET /v1/systems/:id` but **no list endpoint**, so
   the page has nothing to call. The compile flow is real and verified; the list is
-  a placeholder, and building the list would need an endpoint the plan does not
+  a placeholder, and building the list would need an endpoint that does not
   specify.
 
-## Experiment tracking, and the last unblocked plan item
+## Experiment tracking
 
-PLAN §41.10 asks for MLflow and the stack table lists it under Experiments. What it
+MLflow is the experiments layer. What it
 buys is the thing one report card cannot: comparing compiles over time and across
 task classes, which is what a catalog ranker would eventually read.
 
@@ -641,9 +641,9 @@ extra, which silently skipped three DSPy tests. Use `--all-extras` to keep both.
 
 ## Auth and artifact storage, in the form that needs no account
 
-PLAN §41.17 asks for "Auth (Clerk is fine) + object storage for artifacts". The
-parenthesis is load-bearing: the provider is not specified and Phase I runs locally,
-so what ships is the smallest thing that is actually auth rather than a placeholder.
+Auth and object storage are both wanted, and the provider is left open. The provider
+is not specified and this runs locally, so what ships is the smallest thing that is
+actually auth rather than a placeholder.
 
 A bearer key on `/v1`, compared with `secrets.compare_digest`, off unless
 `MEKOY_API_KEY` is set. `X-API-Key` works too, because curl and `fetch` are friendlier
@@ -687,7 +687,7 @@ running server, so it is logged, not warned.
 
 ## A second serving stack, and the format tax measured
 
-PLAN §41.5 says *"open model invoke via Fireworks **or** vLLM + JSON schema"*. I had
+Serving an open model with JSON schema, through a managed API or a local engine. I had
 claimed this was blocked on a GPU. It was not: **`llama-server` is installed**, which
 is a genuinely different serving stack from Ollama, and it is reachable on this
 machine. The runtime is a generic OpenAI-compatible client, so pointing it at
@@ -721,8 +721,8 @@ llama.cpp (0.5B), same dev slice:
 Two things worth reading carefully.
 
 **On llama.cpp the schema raises structural validity and lowers field accuracy:**
-gate pass rate 0.842 → 0.895 while quality 0.782 → 0.647. That is PLAN §35's
-"constrained decoding 'format tax' (structure can hurt accuracy)" measured rather
+gate pass rate 0.842 → 0.895 while quality 0.782 → 0.647. That is the constrained
+decoding "format tax" — structure can hurt accuracy — measured rather
 than asserted. The constraint keeps the output parseable more often and makes the
 values worse.
 
@@ -738,34 +738,19 @@ test, because a silent fallback here would hide exactly the difference above.
 supported GPU for one. What is verified is that the code path is stack-agnostic on
 two real servers.
 
-## The control plane is deployable but not deployed
+## The HTTP API is deployable, and the container is where one gap showed up
 
-PLAN §41.27 is "Fly.io control plane deploy". I had called it blocked on
-`flyctl auth login`. Two corrections, both from checking instead of assuming:
+The API and the container are two different things, and building the container found a
+defect the local run had been hiding.
 
-**`flyctl` cannot read its own config in this version.** `fly auth whoami` says
-"no access token available" while `~/.fly/config.yml` holds a 665-character
-`access_token`. Passing it via `FLY_API_TOKEN` authenticates fine — as
-`mitch@studioyeehaw.com`, with three existing `noah-computer-*` apps. So the
-credential was never missing; flyctl's own lookup was.
+What ships is everything except a paid hosting step:
 
-What ships is everything except the paid step:
-
-- **`Dockerfile.api`** — the control plane, distinct from the repo's other
-  Dockerfile, which serves a *downloaded System*. Deploying the wrong one would
-  ship a model instead of the API.
-- **`fly.toml`** — `internal_port = 8080`, a `/health` check, `auto_stop_machines`
-  so a demo API does not idle-burn, a 512MB shared-cpu-1x, and a volume for bundles.
-
-```
-fly config validate   ->  ✓ Configuration is valid
-docker build -f Dockerfile.api -t mekoy-api .   -> 8s
-docker run ... -e MEKOY_API_KEY=container-key
-  GET  /health                  -> 200          (open by design)
-  POST /v1/systems  (no key)     -> 401
-  POST /v1/systems  (right key)  -> 422         past auth, validation as expected
-  /openapi.json                  -> 12 routes, the full declared surface
-```
+- **`Dockerfile.api`** — the control plane, distinct from the repo's other Dockerfile,
+  which serves a *downloaded System*. Deploying the wrong one would ship a model
+  instead of the API.
+- **`fly.toml`** — an example deploy config: `internal_port = 8080`, a `/health`
+  check, `auto_stop_machines` so a demo API does not idle-burn, and a volume for
+  bundles. It is a starting point to copy, not our infrastructure.
 
 The container also fixed a capability gap I had only observed before. Against the
 local API an upgrade request gets:
@@ -786,26 +771,25 @@ INFO: connection rejected (403 Forbidden)
 streaming client sees a refusal instead of a broken endpoint, which is the
 difference between a client that can be debugged and one that cannot.
 
-**Not done: `fly deploy`.** It creates a billable app on someone else's account, so
-it needs a yes. The command is:
+**A public deploy is a billing decision, so nothing is deployed by this repo.** It
+would create a billable app and needs an explicit yes from whoever owns the account.
+Two caveats worth stating before anyone deploys it:
 
-```
-fly apps create mekoy-control-plane
-fly secrets set MEKOY_API_KEY=... -a mekoy-control-plane
-fly deploy -a mekoy-control-plane
-```
-
-One caveat worth stating before anyone deploys this: the store is process-local, so
-the container runs a single worker and loses every System on restart. Persistent
-storage is what PLAN §41.17's object-storage half still owes.
+- The store is process-local, so the container runs a single worker and loses every
+  System on restart. Persistent object storage would need a hosted bucket, which needs
+  an account, so what ships is the interface and a local implementation of it.
+- A container's `127.0.0.1` is the container, so the default model URL points at
+  nothing. `MEKOY_MODEL_BASE_URL` sets a deployment default and a caller may override
+  it per request. Compiling in a deployment needs someone to point it at a reachable
+  model server.
 
 ## Training, exercised for the first time
 
 Every compile in this project has reported `training: skipped`. That is a
-first-class outcome per PLAN §15.8, but it meant §15.10's *"if below gate: one LoRA
-SFT rank 8-16"* had never run. §41.12 asks for Fireworks, and there is no Fireworks
+first-class outcome, but it meant the rule "if below gate: one LoRA SFT at rank
+8-16" had never run. Fireworks is one way to run it, and there is no Fireworks
 credential on this machine — but **Apple Silicon trains LoRA natively**, which makes
-the plan's training rule testable without one.
+the training rule testable without one.
 
 `mlx` was already installed. A rank-8 LoRA on Qwen2.5-1.5B-Instruct-4bit, 120
 iterations over the 58-row training split:
@@ -844,9 +828,9 @@ identical is suspicious in a way that similar is not.
 
 ### What the code now encodes
 
-`train.py` makes the plan's rule executable rather than a note:
+`train.py` makes the training rule executable rather than a note:
 
-- **`should_train(report, slos)`** — PLAN §15.10 trains only below the gate. A
+- **`should_train(report, slos)`** — training runs only below the gate. A
   System that already clears its gate spends compute to move a number nobody asked
   to move, and the card says `training: skipped` with the reason.
 - **The rank band is enforced, not clamped.** `LoRaBudget(rank=32)` raises, because
@@ -861,8 +845,8 @@ to have tested.
 
 ## Two CLI commands that were missing, and the gap that blocked a safe deploy
 
-Re-reading §41.14 — *"CLI: eval / compile / report / serve"* — instead of assuming
-the CLI was done:
+Re-reading the intended CLI surface — eval / compile / report / serve — instead of
+assuming it was done:
 
 **`report` did not exist.** Added: it prints the card the compile wrote next to the
 corpus, so a report is readable without the API running.
@@ -897,10 +881,14 @@ Leaving it open was the one thing that made a public deploy irresponsible: an
 unauthenticated endpoint that accepts compile jobs. It is now guarded alongside
 `/v1`, verified live, and the deploy no longer has a security blocker.
 
-## The control plane is deployed
+## The API surface is guarded, and the guard was verified against a real server
 
-PLAN §41.27. Live at **https://mekoy-control-plane.fly.dev**, in the `personal` org,
-one shared-cpu-1x 512MB machine that stops when idle.
+Leaving it open was the one thing that made a public deploy irresponsible: an
+unauthenticated endpoint that accepts compile jobs. It is now guarded alongside
+`/v1`, verified against a running server, and the deploy no longer has a security
+blocker.
+
+The guard was checked end to end rather than asserted:
 
 ```
 GET  /health              -> 200          open by design
@@ -910,38 +898,37 @@ POST /mcp         (no key)-> 401          was 200 before the guard
 POST /mcp         (key)   -> 200, 8 tools
 ```
 
-A full workflow against the live service:
+A full workflow, including the failure that proves the model host is per-request:
 
 ```
-POST /v1/systems                    -> sys_1db8d146...
+POST /v1/systems                    -> accepted
 POST /v1/systems/:id/evals          -> approved, 2 train / 1 dev / 1 test
 GET  /v1/systems/:id/report         -> 409 (phase error: not compiled yet)
 POST /v1/systems/:id/compile        -> 503 "model server unreachable at
                                        https://model-host.invalid/v1/chat/completions"
 ```
 
-That last line is the useful one: it names **the base_url the caller passed**, not
-the local default, so the per-request model host is genuinely honoured.
+That last line is the useful one: the error names **the base_url the caller passed**,
+not the local default, so the per-request model host is genuinely honoured. A caller
+who points it at a real server gets a compile; a caller who does not gets a message
+that says so.
 
 Two limitations, both demonstrated rather than predicted:
 
-- **No model host is deployed.** A container's `127.0.0.1` is the container, so the
-  default model URL points at nothing. `MEKOY_MODEL_BASE_URL` sets a deployment
-  default and a caller may override per request — which is what the 503 above
-  proves. Compiling on this deployment needs someone to point it at a reachable
-  model server.
-- **The store is process-local.** A redeploy wiped the System created minutes
-  earlier; the next request answered `system not found`. Persistent storage is what
-  §41.17's object-storage half still owes, and it is the first thing to fix before
-  anyone relies on this.
-
-Tear it down with `fly apps destroy mekoy-control-plane`.
+- **No model host ships with the API.** A container's `127.0.0.1` is the container, so
+  the default model URL points at nothing. `MEKOY_MODEL_BASE_URL` sets a deployment
+  default and a caller may override per request — which is what the 503 above proves.
+  Compiling needs someone to point it at a reachable model server.
+- **The store is process-local.** A restart lost a System created minutes earlier; the
+  next request answered `system not found`. Persistent object storage would fix it and
+  needs a hosted bucket, so what ships is the interface plus a local implementation.
 
 ## The model axis was missing, and searching it changed the ranking
 
-A completion audit against §41.9 — *"ASHA controller over {model, decode, k-shot}"* —
-found the search had **no model axis at all**. `HarnessConfig` varied k-shot, retries,
-decode, prompt, schema, and bootstrap, but never the base model. §15.5 names the
+A completion audit against the intended search surface — an ASHA controller over
+{model, decode, k-shot} — found the search had **no model axis at all**.
+`HarnessConfig` varied k-shot, retries, decode, prompt, schema, and bootstrap, but
+never the base model. The model is named first in the
 model first in its candidate pool and samples over three of them, so the search was
 missing its largest lever and had been for the whole project.
 
@@ -958,7 +945,7 @@ Winner: the 7B, test quality 0.940, **7.8 s/doc**.
 
 **The model axis lost to the harness axis, and the smaller model won on both quality
 and speed.** Every 14B candidate was beaten by a 7B with the right harness, at roughly
-half the latency. That is the plan's own thesis — *"optimize model + harness
+half the latency. That is the whole thesis — *"optimize model + harness
 together"*, and a specialist beating a bigger general model — measured on this task
 rather than asserted.
 
@@ -1050,8 +1037,7 @@ unverified.
 - **Exact string comparison on free-text fields.** This is the bug that flattered
   the eval twice. First `"Saturday 9am"` was counted wrong against gold
   `"9am Saturday"`; then `"Sunday at 1:00 PM"` was counted wrong against
-  `"Sunday at 1pm"`. `PLAN.md` §16.3 already says free text is judged, never
-  gated on exact match. `when` now normalizes time formatting (glued meridiems,
+  `"Sunday at 1pm"`. Free text is judged, never gated on exact match. `when` now normalizes time formatting (glued meridiems,
   trailing `:00`, filler words) and only compares an AM/PM marker when both sides
   give one. `strict` is still reported alongside so the difference is not hidden.
 

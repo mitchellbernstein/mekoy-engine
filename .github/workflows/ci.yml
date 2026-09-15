@@ -1,6 +1,6 @@
 name: ci
 
-# PLAN §41.26: unit tests, no GPU required. Nothing here touches a model server,
+# Unit tests only, no GPU required. Nothing here touches a model server,
 # so CI is deterministic and the eval split is enforced by tests rather than by
 # a live run.
 

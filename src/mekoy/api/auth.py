@@ -1,9 +1,9 @@
-"""API-key auth for the control plane.
+"""API-key auth for the local API.
 
-PLAN §41.17 asks for "Auth (Clerk is fine) + object storage for artifacts". The
-parenthesis matters: the provider is not specified, and Phase I runs locally. This
-is the smallest thing that is actually auth rather than a placeholder — a bearer
-key, compared in constant time, required on `/v1` when one is configured.
+A bearer key guards the API. A framework like Clerk would do more, and it needs an
+account and a hosted service; this runs locally with neither. A bearer key is the
+smallest thing that is actually auth rather than a placeholder: compared in constant
+time, and required on `/v1` when one is configured.
 
 Off by default. An unset `MEKOY_API_KEY` leaves the API open, which is the right
 default for a laptop and the wrong one for anything reachable, so the app logs a

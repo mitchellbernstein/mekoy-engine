@@ -1,7 +1,7 @@
 """Privacy gate: no closed-API output may enter a compile.
 
 `AGENTS.md` bans closed-model distillation outright — no GPT / Claude / Gemini
-output in SFT, DPO, RL, or LoRA data. PLAN §41.24 asks for the same rule as a
+output in SFT, DPO, RL, or LoRA data. The same rule is enforced as a
 flag. This module makes it a runtime check rather than a paragraph.
 
 A closed API stays legal in exactly one place: a bake-off score baseline.

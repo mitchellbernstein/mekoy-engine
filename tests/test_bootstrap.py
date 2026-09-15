@@ -125,5 +125,5 @@ def test_kept_demos_respect_the_cap() -> None:
 
 
 def test_the_demo_cap_matches_the_shot_bracket() -> None:
-    """PLAN 15.5 brackets shots at 0 and 4."""
+    """Shots are worth testing at 0 and 4."""
     assert DEFAULT_MAX_DEMOS == 4

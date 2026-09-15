@@ -6,7 +6,7 @@ Fields come in two kinds, and they are not scored the same way:
 - **Free-text fields** (`restaurant`, `when`, `under_name`) compare on normalized
   tokens, so "9am Saturday" and "Saturday 9am" are the same answer. `when` goes
   further and ignores time formatting and filler, so "Sunday at 1:00 PM" and
-  "Sunday at 1pm" agree. PLAN §16.3: free text is judged, never gated on exact
+  "Sunday at 1pm" agree. Free text is judged, never gated on exact
   match.
 
 `quality` is the primary number (normalized). `strict_quality` keeps raw string

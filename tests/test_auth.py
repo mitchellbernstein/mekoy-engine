@@ -1,4 +1,4 @@
-"""API-key auth and the artifact store. PLAN 41.17, local form."""
+"""API-key auth and the artifact store, in their local form."""
 
 from pathlib import Path
 

@@ -145,7 +145,7 @@ def compile_cmd(
     console.print(f"task: {task.name}")
     extra = tuple(also_model or ())
     if extra:
-        # PLAN 15.5 samples over several open models; the search cannot pick one
+        # The search samples over several open models; it cannot pick one
         # it has no completer for, so each is registered here.
         space = replace(space, models=("", *extra))
         console.print(f"models searched: {', '.join(('default', *extra))}")
@@ -514,7 +514,7 @@ def report_cmd(
 ) -> None:
     """Print the compile report for a corpus.
 
-    PLAN 23 declares GET /v1/systems/:id/report and PLAN 41.14 lists a `report`
+    The API exposes GET /v1/systems/:id/report and the CLI has a `report`
     CLI command. This reads the card the compile wrote next to the corpus, so a
     report is readable without the API running.
     """
@@ -535,7 +535,7 @@ def serve_cmd(
 ) -> None:
     """Run the HTTP control plane.
 
-    PLAN 41.13 is an OpenAI-compatible invoke server and 41.14 lists `serve`. This
+    An OpenAI-compatible invoke server is the goal, reached through `serve`. This
     used to print "not in local MVP" while the app it should serve already existed
     at `mekoy.api.main` — it does not host anything for a customer, which is a
     different thing from not existing.

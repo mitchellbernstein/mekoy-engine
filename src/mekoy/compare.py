@@ -1,6 +1,6 @@
 """Compare two compiled Systems, or two bake-offs, on the same test split.
 
-PLAN §41.25. Comparison is only meaningful when both sides were measured on the
+Comparison is only meaningful when both sides were measured on the
 same examples, so the card states the split it was given and refuses to guess.
 """
 

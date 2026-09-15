@@ -1,6 +1,6 @@
 """BootstrapFewShot: pick the demonstrations that survive the gate.
 
-PLAN 15.4 makes this Stage 0 of the optimisation engine, before any search over
+This is stage 0 of the optimisation engine, before any search over
 k-shot and decode. What ships without it is "take the first k training rows", which
 is a sample, not a selection: it has no idea whether a given row teaches anything
 or whether the model already handles it.
@@ -14,7 +14,7 @@ The demonstration's label is taken from gold rather than from the trace. The
 selection is the contribution; teaching a System from a possibly-wrong model output
 is not something this pipeline should do.
 
-Optional dependency, like `gepa`: PLAN 35 keeps DSPy out of the core install.
+Optional dependency, like `gepa`: DSPy stays out of the core install.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 __all__ = ["DEFAULT_MAX_DEMOS", "bootstrap_demos"]
 
-#: Demonstrations to keep. PLAN 15.5 brackets shots at 0 and 4, so four is the
+#: Demonstrations to keep. Shots are worth testing at 0 and 4, so four is the
 #: ceiling a compile would ever ask for.
 DEFAULT_MAX_DEMOS = 4
 #: Candidate demonstrations to consider before selecting.

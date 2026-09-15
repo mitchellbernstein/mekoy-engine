@@ -1,83 +1,76 @@
-# AGENTS.md
+# Working on the engine
 
-This repo is an **AI System Compiler**. You compile owned **Systems** for one job. You do not build a generic coding agent, a document-AI company, or a GPU cloud.
+Rules for anyone changing this code, human or agent. They are constraints that came out
+of measurements, not preferences.
 
-**Precedence:** the engine contract in `src/mekoy/tasks.py` and the checks in
-`src/mekoy/verify.py` are the source of truth. If this file disagrees with the code,
-the code wins.
+## The non-negotiables
 
-## Vocabulary
+- **No closed-model distillation.** Never put GPT / Claude / Gemini or other closed-API
+  outputs into SFT, DPO, RL, or LoRA data. Contract risk, and providers fingerprint it.
+  Allowed compile data: your own gold labels, your own production traces, synthetic data
+  from **open** models whose licences permit it, and deterministic checks. A closed API
+  may only ever be an **opt-in score baseline** — never a source of training data.
 
-| Word | Meaning |
-|---|---|
-| **Compiler** | Us. Hidden search over model + harness + eval + runtime. |
-| **System** | The artifact we emit, host, sell, and route. |
-| **Researcher** | Internal search policy (ASHA/Hyperband + GEPA). Not a chat persona. Not a paper-reader in Phase I. |
-| **Lab model** | Large **open-weight** model used at compile time (evals, reflection, optional open-to-open distill). |
-| **Orchestrator** | Phase III router across **listed Systems** (jobs). Not “which chat model is smartest.” |
+- **No search without an approved eval.** `compile` refuses to run until the examples are
+  approved and the labels have been audited. A score computed against unverified labels
+  is worse than no score, because it looks like evidence.
 
-Never call the artifact a compiler, a worker, or a model card.
+- **No mock-as-done.** Verify against real APIs and real eval sets. A branch that has
+  only ever run against a stub is untested, not finished.
 
-## What you are building (Phase I)
+- **Keep the engine self-sufficient.** This repository must never import the portal, a
+  cloud runner, or billing. If a feature only works because a hosted service exists, it
+  does not belong here.
 
-A user (usually inside Claude / Claude Code / Codex / ChatGPT / Grok) describes a job and gives examples. You:
+## Rules the measurements bought
 
-1. Propose an eval. **Do not search until they approve the checks.**
-2. Search: open models, prompts, constrained decode, verify/retry, optional LoRA.
-3. Emit a System they can **host on our API, self-host, or download**.
+- **The harness is model plus deterministic policy** — verify, retries, call limits. A
+  prompt never owns a total or an approval decision. Changing only the harness moved
+  accuracy 0.905 → 0.950 on the same model, which is why the harness is the product and
+  the model is a knob.
 
-First proof job: closed-schema extract-and-verify from **already-text** (receipt / simple invoice). Not PDFs-from-pixels.
+- **Always A/B unconstrained.** Constrained decoding buys structural validity and can
+  cost field accuracy; it did on llama.cpp. Never assume the grammar helped.
 
-Ship together: Researcher (hidden), hosted invoke, download bundle, CLI + API, **one** agent connector.
+- **Free text is judged, never gated on exact match.** Compare meaning, not characters.
 
-## What you are not building now
+- **The search never sees the examples it is judged on.** Selection reads `dev`; `test`
+  is scored once, after a winner exists.
 
-Marketplace, payouts, catalog orchestrator, extra connectors after the first, OCR/layout, FX or Pi as the production runtime, GRPO/RL, a 50-technique registry UI, an agent that browses arXiv, owning GPUs, Rails, a generic coding-agent product.
+- **Report what was not run.** `training: skipped` is a first-class outcome. A report
+  that hides a skipped stage is half a report.
 
-## Hard bans
+- **Say when the machine is the bottleneck.** A slow compile is usually one request at a
+  time or a context reserved far larger than the work needs. Measure it, do not quote a
+  number from someone else's hardware.
 
-- **No closed-model distillation.** Do not put GPT / Claude / Gemini / other closed-API outputs in SFT, DPO, RL, or LoRA data. Contract risk; providers fingerprint it. Allowed compile data: customer gold, customer prod traces, synthetic from **open** models whose licenses allow it, deterministic checks. Closed APIs only as an **opt-in score baseline** or optional 2% runtime tail.
-- **No FX / Pi production harness.** Steal ideas (checkpoints, tool-schema budgets). Production is a schema → decode → validate → retry/verify loop.
-- **No Rails.** Compiler and control plane are Python.
-- **No search without an approved eval.**
-- **No publish default-on.** Catalog is Phase III; twice-confirmed opt-in; our eval badges, not self-report.
-
-## Stack
-
-| Layer | Use |
-|---|---|
-| Compiler / API | Python 3.12+, uv, ruff, pytest, FastAPI |
-| Inner opt | DSPy + GEPA (MIPROv2 fallback). DSPy is IR, not the product. |
-| Serving | vLLM + structured outputs (xgrammar). Ollama/MLX for local/dev. |
-| Train (if needed) | Fireworks LoRA SFT; Together backup. One method in v1. |
-| Eval | Promptfoo + deterministic schema/numeric checks |
-| Experiments | MLflow |
-| Web (optional) | Next.js App Router + Tailwind + shadcn |
-| Control plane host | Fly.io |
-| GPU jobs | Fireworks / Modal / Together — rented |
-
-Layout when code exists:
+## Layout
 
 ```text
-compiler/   spec, eval, program, search, techniques, runtime, providers, cli, api, connectors
-web/        optional Next.js
-examples/   first fixture: cord-receipt (text only)
+src/mekoy/
+  search.py     candidates, staged pruning, Pareto, SLO stop
+  reflect.py    reflective optimiser: read the failures, rewrite the brief
+  verify.py     deterministic checks — the gate a candidate must clear
+  score.py      field scoring
+  tasks.py      task definitions: schema, prompt, gate, scorer
+  compile.py    compile a System and produce its report
+  doctor.py     check the local setup and price it against the hardware
+  train.py      optional LoRA, optional from-scratch training
+  api/          the local HTTP control plane
+  mcp_server.py the MCP connector
+examples/       labelled corpora, one directory per task
+connectors/     per-assistant connection config
+plugins/        packaged skill for agent harnesses
 ```
 
-## How to work
+## Before you commit
 
-- Eval-first. Generate checks from the schema + examples; user says yes; then compile.
-- Harness is model + deterministic policy (verify, retries, call limits). Prompt does not own totals or eval approval. See `.planning/research/harness-langchain-2026-06-03.md`.
-- All options on the table **inside the Researcher**. The user never names LoRA or GEPA.
-- Training is first-class and skippable. Report when it was not run.
-- Privacy slider is real: default compile and runtime stay on open weights we (or they) run.
-- Verify against real APIs and real eval sets. No mock-as-done.
-- Apple signing, if it ever appears: Studio Yeehaw LLC, team `YQJ7BM8326`, prefer `com.studioyeehaw.*`.
+```bash
+uv run ruff check .          # lint
+uv run ruff format --check src tests
+uv run pytest -q             # the full suite
+```
 
-## Connector tools (user-facing)
-
-`inspect_task`, `propose_eval`, `compile_system`, `get_compile_status`, `get_report`, `deploy_system` (`hosted` | `self_host` | `download`), `invoke_system`, `list_systems`.
-
-Never expose `train_model`, provider keys, LoRA rank, or GEPA budgets.
-
-Phase III (not now): `publish_system`, `run` with `system` / `set` / `allowlist` / `denylist`.
+The suite must collect and pass **without** the optional extras installed. `dspy` and
+`mlflow` are optional; import them lazily or guard the import, never at module level in
+a way that breaks collection.

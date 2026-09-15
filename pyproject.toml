@@ -21,10 +21,10 @@ dependencies = [
 mekoy = "mekoy.cli:main"
 
 [project.optional-dependencies]
-# PLAN §15.8's inner optimiser. Optional on purpose: `spec.json` must stay
-# loadable and invokable without DSPy installed (PLAN §35).
+# The reflective inner optimiser. Optional on purpose: `spec.json` must stay
+# loadable and invokable without DSPy installed.
 gepa = ["dspy>=3.3,<4"]
-# PLAN 41.10's experiments layer. Optional: it pulls 51 packages, and the JSONL
+# The experiments layer. Optional: it pulls 51 packages, and the JSONL
 # fallback in `tracking.py` records the same fields without them.
 mlflow = ["mlflow>=3,<4"]
 
@@ -84,7 +84,7 @@ fixable = ["ALL"]
 # The harness entry point names every knob a caller may set; grouping them into
 # an options object would only move the same six arguments one level down.
 "src/mekoy/harness.py" = ["PLR0913"]
-# dspy is an optional, untyped dependency imported lazily on purpose (PLAN §35),
+# dspy is an optional, untyped dependency imported lazily on purpose,
 # so its objects are `Any` and the import cannot live at module scope.
 "src/mekoy/gepa.py" = ["ANN401", "PLC0415"]
 "src/mekoy/bootstrap.py" = ["ANN401"]

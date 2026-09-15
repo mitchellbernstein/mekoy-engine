@@ -47,7 +47,7 @@ class _Recorded:
 
 
 def test_the_schema_axis_is_a_b_a_ed() -> None:
-    """PLAN 35: always A/B unconstrained. That applies to schemas too."""
+    """Always A/B unconstrained. That applies to schemas too."""
     space = SearchSpace.for_task(RESTAURANT, train_n=20)
     assert space.schema == (False, True)
     labels = {c.label.split()[2] for c in space.candidates()}
@@ -129,7 +129,7 @@ def test_a_completer_reports_a_server_error_rather_than_masking_it() -> None:
 
 
 def test_the_model_is_a_search_axis() -> None:
-    """PLAN 15.5 samples over several open models; 41.9 names model first."""
+    """The search samples over several open models, and model comes first."""
     space = SearchSpace.for_task(RESTAURANT, train_n=10)
     assert space.models == ("",), "one model must behave exactly as before"
     with_models = SearchSpace(

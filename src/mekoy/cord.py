@@ -1,7 +1,7 @@
 """Load CORD receipts as text-only extraction examples.
 
 CORD (Consolidated Receipt Dataset) ships receipt photos plus per-receipt JSON:
-`gt_parse` holds the annotation and `valid_line` holds the OCR lines. PLAN §41.3
+`gt_parse` holds the annotation and `valid_line` holds the OCR lines.
 asks for text-only loaders, so this module renders the OCR lines into a plain-text
 receipt and maps the annotation onto our `Receipt` schema. No pixels are read.
 

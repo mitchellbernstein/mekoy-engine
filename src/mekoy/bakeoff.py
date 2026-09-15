@@ -1,7 +1,7 @@
 """Same-split bake-off: a strong baseline vs the compiled open System.
 
 Both lanes are scored on `test`, which neither selection nor the baseline ever
-saw. The verdict is PLAN §15's two-part rule: match or beat quality, and cost
+saw. The verdict is a two-part rule: match or beat quality, and cost
 less. Either half alone is not a win.
 """
 

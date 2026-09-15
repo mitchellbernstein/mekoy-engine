@@ -35,7 +35,7 @@ type Json = dict[str, object]
 _PROTOCOL, _STAMP, _URL, _MODEL = "2024-11-05", ".eval-approved", "http://127.0.0.1:11434/v1", "qwen2.5:7b"
 _LOCK = "eval is not approved; call propose_eval with approve=true"
 _SCHEMA_FIELDS = " ".join(RestaurantOutcome.model_fields)
-#: PLAN §155: ask only for what the examples and job did not already say.
+#: Ask only for what the examples and the job did not already say.
 _INTAKE = (
     "intake (skip anything you already told me):",
     "  1. what counts as unacceptable, versus merely wrong?",

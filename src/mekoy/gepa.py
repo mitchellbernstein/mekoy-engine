@@ -1,19 +1,19 @@
 """GEPA-light: reflective prompt evolution, bounded by a metric-call cap.
 
-PLAN 15.8 stages this after the candidate pool: *"Survivors: GEPA auto=light,
+This runs after the candidate pool: survivors get a light reflective pass,
 cap max_metric_calls 50-150, reflection LM = large open model."* 41.8 asks for the
 wrapper. This is that stage, built on DSPy 3.3 as the plan specifies.
 
 Three decisions worth stating:
 
-- **Optional dependency.** PLAN 35 warns about "Python DSPy lock-in → System.json
+- **Optional dependency.** The risk is DSPy lock-in: a System.json
   must be loadable without DSPy for invoke." DSPy lives in the `gepa` extra and is
   imported lazily, so the core compile path never touches it.
 - **GEPA is judged by our metric.** The metric parses a reply through the task's
   schema and gate, scores it with the task's scorer, and returns the gate's own
   reasons as feedback. The optimizer is therefore pushed toward a System that
   satisfies the checks we enforce, not toward a generic objective.
-- **The reflection LM is local.** PLAN's ban on closed-model compile data covers
+- **The reflection LM is local.** The ban on closed-model compile data covers
   reflection too: an instruction written by a closed API is closed-model output.
 """
 
@@ -39,10 +39,10 @@ __all__ = [
     "optimize",
 ]
 
-#: PLAN 15.8 caps GEPA at 50-150 metric calls. The floor of that band keeps a
+#: GEPA is capped at 50-150 metric calls. The floor of that band keeps a
 #: laptop run bounded while still giving reflection something to work with.
 #:
-#: PLAN 15.8 asks for "GEPA auto=light, cap max_metric_calls 50-150", but dspy
+#: GEPA wants auto=light with max_metric_calls 50-150, but dspy
 #: rejects both at once: "Exactly one of max_metric_calls, max_full_evals, auto
 #: must be set." The cap is the part that matters, because it is what bounds a
 #: compile, so that is the default and `auto` is opt-in instead.
@@ -197,7 +197,7 @@ def optimize(  # noqa: PLR0913 - the stage names its own knobs
             max_tokens=900,
             temperature=0.7,
         ),
-        # Pareto over complementary traces, the discipline PLAN 15 copies from
+        # Pareto over complementary traces, the discipline this copies from
         # GEPA to avoid collapsing onto a single behaviour.
         candidate_selection_strategy="pareto",
         # A local server serialises generation; threads only add contention and

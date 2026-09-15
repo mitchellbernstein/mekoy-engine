@@ -283,7 +283,7 @@ def deploy_system(
 ) -> DeployResponse:
     """Write a downloadable bundle, or refuse hosting.
 
-    PLAN 23 declares hosted, self_host, and download. Hosting is not part of the
+    A System can be hosted, self-hosted, or downloaded. Hosting is not part of the
     local MVP, so those two modes say so rather than pretending. `download` writes
     spec.json, report.txt, README.md, and docker-compose.yml next to the run.
     """
@@ -354,7 +354,7 @@ def chat_completions(
 ) -> ChatCompletionResponse:
     """OpenAI-compatible invoke. `model` names the System, not a base model.
 
-    PLAN 23 calls for invoke to be reachable this way so an existing OpenAI client
+    Invoke is reachable this way so an existing OpenAI client
     can point at a System without new code. The last user message is the document.
     """
     record = ctx.store.require_compiled(body.model)
