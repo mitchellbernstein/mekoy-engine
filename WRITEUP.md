@@ -323,15 +323,28 @@ Accepting `RM` alone moved SROIE's gate pass rate from **0.762 to 0.905**.
 
 ### Real receipts, final numbers
 
-| corpus | rows | test quality | schema | $/doc |
+| corpus | rows | test quality, free-form | test quality, schema-constrained | $/doc |
 |---|---|---|---|---|
-| CORD | 80 | 0.683 | 0.875 | 0.00000 |
-| SROIE | 105 | 0.522 | 0.905 | 0.00000 |
+| CORD | 80 | 0.683 | **0.875** | 0.00000 |
+| SROIE | 105 | 0.522 | **0.905** | 0.00000 |
 
-Against 0.886–0.908 on the hand-written fixture. **A 7B on real OCR receipts
-scores 0.52–0.68**, and the fixture was flattering by a wide margin. Both test
-splits are 16 and 21 rows, so these numbers carry wide error bars and should not
-be ranked against each other.
+Against 0.886–0.908 on the hand-written fixture. Both test splits are 16 and 21
+rows, so these numbers carry wide error bars and should not be ranked against each
+other.
+
+**Read the constrained column, not the free-form one.** Earlier revisions of this
+writeup quoted "0.52–0.68" for real receipts and left it there, which undersold the
+engine badly: those are the figures with decoding left unconstrained, and the same
+runs with the schema enforced land at **0.875 and 0.905**, close to the restaurant
+job's 0.944. The constraint is not a footnote — it is one of the axes the compiler
+searches and one of the reasons a compiled System beats an unconstrained prompt.
+Quoting the unconstrained number as the engine's capability was a mistake, and a
+reader comparing us to a frontier API would have been comparing our worst
+configuration to their best.
+
+The free-form column is kept because it is the honest cost of the constraint: a
+constrained decode can reject an answer outright rather than return a wrong one, and
+knowing how often that happens is worth having.
 
 One scoring choice deserves flagging: `address` is compared as a single field over
 a multi-line string, so a mostly-correct address scores zero. That is a harsh rule
