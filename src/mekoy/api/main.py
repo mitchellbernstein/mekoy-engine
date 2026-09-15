@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from mekoy.api import mcp_http
 from mekoy.api.auth import API_KEY_ENV, AuthMiddleware, settings_from_env
 from mekoy.api.mcp_http import router as mcp_router
 from mekoy.api.models import (
@@ -473,6 +474,9 @@ def _default_db_path() -> Path | None:
 def create_app(*, completer: Completer | None = None) -> FastAPI:
     """Build an app with its own store, persisted when MEKOY_DB names a file."""
     ctx = AppContext(store=Store(db_path=_default_db_path()), completer=completer)
+    # One store for both doors: a System compiled through the connector has to be the
+    # System the HTTP API can find, or the two surfaces describe different worlds.
+    mcp_http.bind_context(lambda: ctx)
     # Auth is mounted before CORS so CORS ends up outermost: a 401 still needs
     # CORS headers or a browser reports it as a network failure.
     application = FastAPI(

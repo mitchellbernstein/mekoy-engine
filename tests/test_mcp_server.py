@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from mekoy.api.store import Store, phase_of
 from mekoy.dataset import ExampleRecord, load_examples
 from mekoy.errors import CompileError
 from mekoy.mcp_server import TOOLS, Server, _path, _Record
@@ -290,3 +291,40 @@ def test_invoke_refuses_rather_than_inventing_a_harness(tmp_path: Path) -> None:
         },
     )
     assert "Uchi" in out
+
+
+def test_a_system_compiled_through_the_connector_reaches_the_shared_store(
+    tmp_path: Path,
+) -> None:
+    """Both doors have to describe one world.
+
+    A System compiled through the connector used to live only in the MCP process's own
+    dict, so the HTTP API could not see it and neither surface knew about the other's
+    work. With a sink attached, the compile is published where the API can find it.
+    """
+    store = Store()
+    server = Server(completer=_CountingCompleter(), sink=store)
+    path = _three_rows(tmp_path)
+
+    _ = server._run("propose_eval", {"examples": str(path), "approve": True})
+    out = server._run("compile_system", {"examples": str(path), "quick": True})
+    assert "quality" in out
+
+    key = str(_path({"examples": str(path)}))
+    system_id = server._systems[key].system_id
+    assert system_id is not None, "the compile was not published"
+
+    record = store.get_system(system_id)
+    assert str(phase_of(record)) == "compiled"
+    assert len(record.examples) == 3, "the rows travelled with it"
+    assert record.winner is not None, "the winner travelled with it"
+
+
+def test_the_connector_works_without_a_store(tmp_path: Path) -> None:
+    """Standalone stdio use must not require a control plane to exist."""
+    server = Server(completer=_CountingCompleter())
+    path = _three_rows(tmp_path)
+    _ = server._run("propose_eval", {"examples": str(path), "approve": True})
+    out = server._run("compile_system", {"examples": str(path), "quick": True})
+    assert "quality" in out
+    assert server._systems[str(_path({"examples": str(path)}))].system_id is None

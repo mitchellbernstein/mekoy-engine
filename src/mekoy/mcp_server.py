@@ -9,7 +9,7 @@ import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NoReturn, assert_never
+from typing import NoReturn, Protocol, assert_never
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -22,7 +22,7 @@ from mekoy.compile import (
     compile_system,
     format_report,
 )
-from mekoy.dataset import load_examples, split_examples
+from mekoy.dataset import TaskExample, load_examples, split_examples
 from mekoy.errors import CompileError, ModelUnreachableError
 from mekoy.harness import DEFAULT_PROMPT, PROMPTS, Decode, extract
 from mekoy.outcome import RestaurantOutcome
@@ -132,9 +132,39 @@ class _Record:
     #: Which task class the compile ran. The schema, gate, and scorer all hang off it,
     #: so a reloaded System has to carry it or it is not the same System.
     task_name: str = "restaurant"
+    #: The id this System has in the shared store, when there is one. It is what makes a
+    #: System built through the connector reachable through the HTTP API.
+    system_id: str | None = None
     report: str | None = None
     config: HarnessConfig | None = None
     trial: Trial | None = None
+
+
+class SystemSink(Protocol):
+    """What the MCP surface needs from a System store.
+
+    Structural rather than a concrete import, so this module does not depend on the
+    control plane's package: the connector has to work standalone over stdio, and a real
+    import would also cycle, since the API mounts this router.
+    """
+
+    def create(
+        self, *, task: str, examples: tuple[TaskExample, ...], task_name: str = ...
+    ) -> object:
+        """Insert a draft System and return it."""
+        ...
+
+    def approve(self, system_id: str) -> object:
+        """Record eval approval."""
+        ...
+
+    def create_run(self, system_id: str, *, quick: bool, model: str = ...) -> object:
+        """Open a compile run."""
+        ...
+
+    def succeed_run(self, run_id: str, report: CompileReport) -> object:
+        """Attach the winner to the run and the System."""
+        ...
 
 
 @dataclass(slots=True)
@@ -142,6 +172,10 @@ class Server:
     """In-process MCP session. Inject a completer so tests skip Ollama."""
 
     completer: Completer | None = None
+    #: A System store to publish what this session compiles. Without one, a System
+    #: compiled through the connector is invisible to the HTTP API, and the two doors
+    #: describe different worlds.
+    sink: SystemSink | None = None
     _systems: dict[str, _Record] = field(default_factory=dict)
 
     def _lm(self, args: Json) -> Completer:
@@ -247,6 +281,7 @@ class Server:
         rec.report = format_report(compiled)
         rec.config = compiled.winner.config
         rec.trial = compiled.test
+        rec.system_id = self._publish(examples, split, task, compiled, rec)
         _ = (examples.parent / "compile-report.txt").write_text(
             rec.report + "\n", encoding="utf-8"
         )
@@ -254,6 +289,38 @@ class Server:
             render_markdown(compiled, task=rec.job), encoding="utf-8"
         )
         return rec.report
+
+    def _publish(
+        self,
+        examples: Path,
+        split: object,
+        task: object,
+        compiled: CompileReport,
+        rec: _Record,
+    ) -> str | None:
+        """Record this compile in the shared store, when one is attached.
+
+        A System built through the connector used to live only in this process, so the
+        HTTP API could not see it and neither door knew about the other's work. Publishing
+        it here is what makes the tool surface and the API describe one world.
+
+        Returns the System id, or None when no store is attached.
+        """
+        if self.sink is None:
+            return None
+        rows = tuple(load_examples(examples))
+        name = getattr(task, "name", rec.task_name)
+        draft = self.sink.create(
+            task=getattr(rec, "job", "") or f"compiled from {examples.name}",
+            examples=rows,
+            task_name=str(name),
+        )
+        system_id = str(draft.id)
+        _ = self.sink.approve(system_id)
+        run = self.sink.create_run(system_id, quick=False, model=str(getattr(rec, "model", "")))
+        _ = self.sink.succeed_run(str(run.id), compiled)
+        del split
+        return system_id
 
     def _status(self, args: Json) -> str:
         examples = _path(args)

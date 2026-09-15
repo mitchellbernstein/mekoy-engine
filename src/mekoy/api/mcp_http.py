@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -11,6 +12,24 @@ from pydantic import TypeAdapter, ValidationError
 from mekoy.mcp_server import Server
 
 _JSON: TypeAdapter[dict[str, object]] = TypeAdapter(dict[str, object])
+
+
+#: Set by the API when it mounts this router. A callable rather than a dependency:
+#: the API imports this module, so this module cannot import the API to ask for its
+#: context, and a `Depends` on an opaque type breaks the generated schema.
+class _Binding:
+    """Where the router keeps the way back to its app's context."""
+
+    provider: Callable[[], object] | None = None
+
+
+_context = _Binding()
+
+
+def bind_context(provider: Callable[[], object]) -> None:
+    """Tell this router how to reach the app's context, once, at mount time."""
+    _context.provider = provider
+
 
 router = APIRouter()
 _server = Server()
@@ -45,6 +64,11 @@ async def mcp_post(request: Request) -> Response:
             },
             status_code=400,
         )
+    # The store is bound per request rather than held on the module-level server, so a
+    # System compiled here lands where the HTTP API can find it and no request inherits
+    # another app's state.
+    bound = _context.provider
+    _server.sink = getattr(bound(), "store", None) if bound is not None else None
     got = _server.handle(payload)
     if got is None:
         return Response(status_code=202)
