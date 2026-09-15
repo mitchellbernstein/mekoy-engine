@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, assert_never
 
-from fastapi import APIRouter, Depends, FastAPI, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -51,7 +51,7 @@ from mekoy.artifacts import ArtifactStore, store_from_env, write_bundle_to
 from mekoy.bundle import spec_for
 from mekoy.compare import compare_cards
 from mekoy.compile import CompileReport, SearchSpace, compile_system
-from mekoy.dataset import TaskExample, coerce_label, split_examples
+from mekoy.dataset import Split, TaskExample, coerce_label, split_examples
 from mekoy.errors import CompileError, ModelUnreachableError
 from mekoy.harness import Decode, extract
 from mekoy.runtime import Completer, OllamaCompleter
@@ -177,9 +177,20 @@ def evaluate_system(
 def compile_endpoint(
     system_id: str,
     body: CompileRequest,
+    background: BackgroundTasks,
     ctx: Annotated[AppContext, Depends(get_ctx)],
 ) -> RunResponse:
-    """Search harness space after eval approval. Training is not run."""
+    """Start a compile and return at once with the run id.
+
+    A compile is minutes of model calls. Running it inside the request meant every other
+    caller queued behind it and the client's connection had to stay open for the whole
+    thing, so closing a laptop tab lost the run and nothing else could be served. The
+    work is handed to the background and the caller follows the run id.
+
+    Everything that fails cheaply - the approval gate, the split, the task, the
+    completer - is still resolved here, so a request that cannot compile says so now
+    rather than leaving a run to die later.
+    """
     run = ctx.store.create_run(system_id, quick=body.quick, model=body.model)
     record = ctx.store.get_system(system_id)
     split = split_examples(record.examples)
@@ -195,16 +206,43 @@ def compile_endpoint(
     # will ever move it. `ModelUnreachableError` is a `CompileError`, so a dead model
     # server was already recorded; what was not was anything else - a bug, a bad value,
     # an unexpected exception - which left the run open forever.
+    background.add_task(
+        _run_compile,
+        ctx=ctx,
+        run_id=run.id,
+        completer=completer,
+        split=split,
+        space=space,
+        task=task,
+    )
+    return run_out(run)
+
+
+def _run_compile(  # noqa: PLR0913 - the task carries what the request already resolved
+    *,
+    ctx: AppContext,
+    run_id: str,
+    completer: Completer,
+    split: Split,
+    space: SearchSpace,
+    task: Task,
+) -> None:
+    """Run one compile and resolve the run whichever way it ends.
+
+    Every exit has to resolve it, because a run left in `running` is worse than a failed
+    one: the caller cannot tell a slow compile from a dead one, and nothing will ever
+    move it. Nothing is raised past this point - the caller is gone by now, and a
+    traceback would only reach the log while the run stayed open.
+    """
     try:
         report = compile_system(completer, split, space, task=task)
     except CompileError as exc:
-        _ = ctx.store.fail_run(run.id, exc.message)
-        raise
-    except BaseException as exc:
-        _ = ctx.store.fail_run(run.id, f"{type(exc).__name__}: {exc}")
-        raise
-    done = ctx.store.succeed_run(run.id, report)
-    return run_out(done)
+        _ = ctx.store.fail_run(run_id, exc.message)
+        return
+    except BaseException as exc:  # noqa: BLE001 - recorded, never re-raised
+        _ = ctx.store.fail_run(run_id, f"{type(exc).__name__}: {exc}")
+        return
+    _ = ctx.store.succeed_run(run_id, report)
 
 
 @_router.get("/v1/runs/{run_id}", tags=["runs"])

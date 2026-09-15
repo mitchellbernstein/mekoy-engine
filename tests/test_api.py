@@ -152,9 +152,7 @@ def test_quick_compile_invoke_and_get_run(
     client: TestClient, rows: tuple[ExampleRecord, ...]
 ) -> None:
     system_id = _approved(client, rows)
-    compiled = client.post(f"/v1/systems/{system_id}/compile", json={"quick": True})
-    assert compiled.status_code == 200
-    body = _parse(compiled.content, RunResponse)
+    body = _settled(client, _start_compile(client, system_id))
     assert body.status == "succeeded"
     assert body.winner is not None
     assert body.winner.k_shot == 0
@@ -194,8 +192,7 @@ def test_invoke_reports_verify_fail(rows: tuple[ExampleRecord, ...]) -> None:
     application = create_app(completer=_Empty())
     with TestClient(application) as client:
         system_id = _approved(client, rows)
-        compiled = client.post(f"/v1/systems/{system_id}/compile", json={"quick": True})
-        assert compiled.status_code == 200
+        _ = _settled(client, _start_compile(client, system_id))
         invoked = client.post(
             f"/v1/systems/{system_id}/invoke", json={"text": rows[0].text}
         )
@@ -216,11 +213,33 @@ def test_create_app_isolates_store(rows: tuple[ExampleRecord, ...]) -> None:
         assert unseen.status_code == 404
 
 
-def _compiled(client: TestClient, rows: tuple[ExampleRecord, ...]) -> str:
-    system_id = _approved(client, rows)
+def _start_compile(client: TestClient, system_id: str) -> str:
+    """POST a compile and return its run id.
+
+    The response is built before the work runs, so its status is `running` even when
+    the compile has already finished by the time the caller reads it. Anything that
+    wants the outcome has to ask the run, which is what a real client does too.
+    """
     response = client.post(f"/v1/systems/{system_id}/compile", json={"quick": True})
     assert response.status_code == 200
-    assert _parse(response.content, RunResponse).status == "succeeded"
+    started = _parse(response.content, RunResponse)
+    assert started.status == "running", "the request should not wait for the compile"
+    assert started.id
+    return started.id
+
+
+def _settled(client: TestClient, run_id: str) -> RunResponse:
+    """The run as the store now holds it."""
+    response = client.get(f"/v1/runs/{run_id}")
+    assert response.status_code == 200
+    return _parse(response.content, RunResponse)
+
+
+def _compiled(client: TestClient, rows: tuple[ExampleRecord, ...]) -> str:
+    system_id = _approved(client, rows)
+    run_id = _start_compile(client, system_id)
+    settled = _settled(client, run_id)
+    assert settled.status == "succeeded", settled.error
     return system_id
 
 
@@ -502,11 +521,9 @@ def test_a_receipt_system_compiles_with_the_receipt_task() -> None:
             "/v1/systems", json={"task": "receipts", "examples": _RECEIPT_ROWS}
         ).json()
         _ = client.post(f"/v1/systems/{created['id']}/evals", json={"approve": True})
-        run = client.post(
-            f"/v1/systems/{created['id']}/compile", json={"quick": True}
-        ).json()
-        assert run["status"] == "succeeded"
-        assert run["winner"] is not None
+        run = _settled(client, _start_compile(client, created["id"]))
+        assert run.status == "succeeded", run.error
+        assert run.winner is not None
         # The control plane must remember which task class it stored, or compile
         # would fall back to the restaurant schema.
         detail = client.get(f"/v1/systems/{created['id']}").json()
@@ -576,8 +593,9 @@ def test_a_run_is_never_left_running(monkeypatch: pytest.MonkeyPatch) -> None:
     sid = created["id"]
     _ = client.post(f"/v1/systems/{sid}/evals", json={"approve": True})
 
-    response = client.post(f"/v1/systems/{sid}/compile", json={"quick": True})
-    assert response.status_code >= 500
+    run_id = _start_compile(client, sid)
+    settled = _settled(client, run_id)
+    assert settled.status == "failed", f"run left as {settled.status!r}"
 
     run = client.get(f"/v1/systems/{sid}").json()["run"]
     assert run is not None, "the run disappeared"
