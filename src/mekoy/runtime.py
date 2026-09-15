@@ -21,6 +21,22 @@ class _Choice(BaseModel):
     message: _ChoiceMessage
 
 
+#: How much of a failing response body to keep in the error message.
+_MAX_ERROR_DETAIL = 400
+
+
+def _error_detail(exc: Exception) -> str:
+    """The status and as much of the response body as is useful, for the error."""
+    response = getattr(exc, "response", None)
+    if response is None:
+        return str(exc)
+    body = (getattr(response, "text", "") or "").strip().replace("\n", " ")
+    status = getattr(response, "status_code", "?")
+    if not body:
+        return f"HTTP {status}"
+    return f"HTTP {status}: {body[:_MAX_ERROR_DETAIL]}"
+
+
 class _ChatResponse(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
     choices: tuple[_Choice, ...] = Field(min_length=1)
@@ -91,7 +107,16 @@ class OllamaCompleter:
                 _ = response.raise_for_status()
                 payload = _ChatResponse.model_validate(response.json())
         except httpx2.HTTPError as exc:
-            msg = f"model server unreachable at {url}: {exc}"
+            # A server that answered with 500 is not unreachable: it was reached and it
+            # refused. Reporting both the same way sent me hunting a network fault when
+            # the model server was up and rejecting the request, and dropping the
+            # response body removed the only text that said why. The body is kept,
+            # truncated, because it is the whole evidence for the failure.
+            detail = _error_detail(exc)
+            if isinstance(exc, httpx2.HTTPStatusError):
+                msg = f"model server rejected the request at {url} ({detail})"
+            else:
+                msg = f"model server unreachable at {url}: {exc}"
             raise ModelUnreachableError(message=msg) from exc
         except ValidationError as exc:
             msg = f"model returned an unexpected body: {exc}"

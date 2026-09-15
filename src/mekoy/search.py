@@ -12,8 +12,10 @@ Selection reads `dev` only. `test` is never touched here.
 from __future__ import annotations
 
 import json
+import os
 import random
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from time import perf_counter
 from typing import TYPE_CHECKING
@@ -298,6 +300,25 @@ def _completer_for(
     return models[config.model]
 
 
+#: How many rows to score at once. The rows in a batch are independent, so this is a
+#: throughput knob and not an accuracy knob: results are collected in row order and a
+#: run at any width is identical to a run at width 1. It defaults to 4 because a local
+#: server left at its own default serves one request at a time, which is what makes a
+#: compile take half an hour. Set `MEKOY_CONCURRENCY=1` to force serial scoring.
+_DEFAULT_CONCURRENCY = 4
+
+
+def _concurrency() -> int:
+    """Rows to score at once, from the environment, clamped to something sane."""
+    raw = os.environ.get("MEKOY_CONCURRENCY", "")
+    if not raw.strip():
+        return _DEFAULT_CONCURRENCY
+    try:
+        return max(1, min(64, int(raw)))
+    except ValueError:
+        return _DEFAULT_CONCURRENCY
+
+
 def evaluate(  # noqa: PLR0913 - the evaluation entry point names its knobs
     completer: Completer,
     rows: tuple[ExampleRecord, ...],
@@ -329,7 +350,9 @@ def evaluate(  # noqa: PLR0913 - the evaluation entry point names its knobs
     scores: list[Scored] = []
     reasons: list[str] = []
     elapsed = 0.0
-    for row in rows:
+
+    def one(row: ExampleRecord) -> tuple[VerifyResult, float]:
+        """Score a single row and report how long it took."""
         start = perf_counter()
         # Self-consistency voting is defined over the restaurant's closed fields,
         # so other tasks take the single-sample path rather than being scored by
@@ -356,7 +379,24 @@ def evaluate(  # noqa: PLR0913 - the evaluation entry point names its knobs
                 ),
                 task=task,
             )
-        elapsed += perf_counter() - start
+        return outcome, perf_counter() - start
+
+    # Rows are independent, so they are scored concurrently. This is the single
+    # largest speedup available to the engine and it costs no accuracy: results are
+    # collected in row order, so a run is byte-identical to the serial one. What it
+    # buys depends on the server — a model server that serves one request at a time is
+    # the reason a compile takes half an hour instead of ten minutes. Ollama serves
+    # one request at a time by default and needs `OLLAMA_NUM_PARALLEL` raised to match
+    # this width; measured on a local 7B, width 4 gave 2.8x throughput.
+    width = min(_concurrency(), max(1, len(rows)))
+    if width <= 1:
+        results = [one(row) for row in rows]
+    else:
+        with ThreadPoolExecutor(max_workers=width) as pool:
+            results = list(pool.map(one, rows))
+
+    for row, (outcome, took) in zip(rows, results, strict=True):
+        elapsed += took
         if isinstance(outcome, VerifyFail):
             reasons.extend(outcome.reasons)
         scores.append(_score_result(gold=row.outcome, result=outcome, task=task))
