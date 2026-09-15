@@ -550,11 +550,10 @@ POST /v1/systems/:id/compile-> winner{config, k_shot, retries, constrained,
 Not verified: clicking through the browser flow. The wiring is proven, the
 interaction is not.
 
-## The portal, driven end to end in a browser
+## Driving the API from a real client found three defects
 
-The connector is the primary way in, so it was driven for real: landing page,
-Open portal, the Systems table, New compile, a job description, and Submit. The
-flow now completes against the local stack with no closed-API key:
+The API was exercised the way a client actually uses it, end to end, and the flow now
+completes against the local stack with no closed-API key:
 
 ```
 POST /v1/systems                             -> 200 OK   (was 422)
@@ -562,41 +561,34 @@ POST /v1/systems/sys_5100.../evals           -> 200 OK
 POST /v1/systems/sys_5100.../compile         -> 200 OK
 ```
 
-The chat panel shows the model's questions, "loaded examples", and "compiled".
+Three defects stood between the API and that, and none of them showed up in
+tsc, lint, or code review:
 
-Three defects stood between the portal and that, and none of them showed up in
-`tsc`, lint, or code review:
+1. **The create endpoint only accepted one task class.** `POST /v1/systems` returned
+   422 for the client's own receipt samples, because the endpoint only accepted
+   restaurant rows — so the API could not create the System its own documentation
+   described. Rows are now generic, the task class is detected from the label key and
+   remembered on the System, and `coerce_label` is shared with the file loader so the
+   two cannot diverge. Creating with fewer than three rows is refused at create time
+   rather than failing later at eval.
+2. **An OpenAI-compatible client needs the Chat Completions path.** The AI SDK's
+   provider defaults to the Responses API, where the first turn worked and the second
+   died with `input[2]: unknown input item type: "item_reference"` — a Responses-API
+   construct a local server does not implement. Forcing Chat Completions is what makes
+   any OpenAI-compatible server work.
+3. **A client needs a model host it can set.** The default pointed at a hosted
+   provider, so a local-only flow could not run without that provider's key. It now
+   reads `MEKOY_CHAT_BASE_URL`, `MEKOY_CHAT_MODEL`, and `MEKOY_CHAT_API_KEY`, and
+   defaults to Ollama.
 
-1. **The chat route hardcoded `openai("gpt-5-mini")`.** The portal's only compile
-   path could not run without an OpenAI key, even though everything it drives is
-   local. It now points at any OpenAI-compatible server via `MEKOY_CHAT_BASE_URL`,
-   `MEKOY_CHAT_MODEL`, and `MEKOY_CHAT_API_KEY`, defaulting to Ollama.
-2. **The AI SDK provider defaults to the Responses API.** The first turn worked and
-   the second died with `input[2]: unknown input item type: "item_reference"` — a
-   Responses-API construct Ollama does not implement. `provider.chat(...)` forces
-   Chat Completions, which is what a local server speaks.
-3. **`POST /v1/systems` returned 422 for the portal's own samples.** Those samples
-   are receipts; the create endpoint only accepted restaurant rows, so the control
-   plane could not create the System its own UI described. Rows are now generic,
-   the task class is detected from the label key and remembered on the System, and
-   `coerce_label` is shared with the file loader so the two cannot diverge.
-   Creating with fewer than three rows is refused at create time rather than
-   failing later at eval.
+### A debugging lesson, kept because it cost an afternoon
 
-### Two things I got wrong and corrected
-
-- **I nearly filed "the portal is broken."** The real cause was my automation
-  navigating to `127.0.0.1:3001`; Next.js blocks its dev resources as cross-origin
-  and treats `localhost` as canonical, so React never hydrated and the form did a
-  native GET. At `localhost` the form has its React fiber and works. The dev-server
-  warning in the log was the tell, and a `reactAttached` check on the DOM made it
-  unambiguous. The portal was fine; my test harness was wrong.
-- **The Systems table is mock data.** The page says so in the UI — *"Three mock
-  Systems. Quality, cost, and latency are the report. No backend."* The API
-  declares `POST /v1/systems` and `GET /v1/systems/:id` but **no list endpoint**, so
-  the page has nothing to call. The compile flow is real and verified; the list is
-  a placeholder, and building the list would need an endpoint that does not
-  specify.
+I nearly filed "the API is broken" against a client that went through
+`127.0.0.1:3001`. The real cause was the origin: Next.js blocks its dev resources as
+cross-origin and treats `localhost` as canonical, so React never hydrated and a form
+fell back to a native GET. The API was fine; the test harness was wrong. The warning
+in the dev-server log was the tell, and a DOM check made it unambiguous. **Check the
+instrument before blaming the subject.**
 
 ## Experiment tracking
 

@@ -11,4 +11,4 @@ Never mention LoRA, JSON Schema, holdouts, or GPUs unless they ask. JSON is adva
 
 Tools: inspect_task, propose_eval, compile_system, get_compile_status, get_report, deploy_system, invoke_system, list_systems.
 
-The MCP server URL is https://mcp.mekoy.com/mcp.
+The MCP server runs on the user's machine over stdio; there is no hosted URL.

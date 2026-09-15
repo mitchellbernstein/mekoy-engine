@@ -1,67 +1,83 @@
-# Install Mekoy on every host
+# Connect Mekoy to your assistant
 
-The same tools. Two transports.
+The same tools, two transports. Pick the one that matches your setup.
 
-| Who | How |
-|---|---|
-| **Local hardware** (Ollama, Apple Silicon, GPU) | stdio MCP. Claude Code, Cursor, Grok Build, Codex CLI. |
-| **No hardware** | HTTPS Streamable HTTP MCP. Claude.ai connector, ChatGPT plugin, Grok custom MCP, Cursor plugin with URL. |
+| Your setup | Transport | Works with |
+|---|---|---|
+| Local hardware (Ollama, Apple Silicon, a GPU) | stdio MCP | Claude Code, Cursor, Codex CLI, Grok Build |
+| No local model hardware | Streamable HTTP MCP | Claude.ai connector, ChatGPT plugin, Cursor plugin by URL |
 
-Public URL: `https://mcp.mekoy.com/mcp`
-
-Until that DNS is live, tunnel the local API:
+**There is no hosted endpoint to point at.** Mekoy runs on your machine, so the server
+is yours to start. If your assistant needs a URL rather than a command, start the local
+API and expose it yourself:
 
 ```bash
 uv run uvicorn mekoy.api.main:app --host 127.0.0.1 --port 8787
 ngrok http 8787
-# then use https://<id>.ngrok.app/mcp
+# then use https://<your-id>.ngrok.app/mcp
 ```
 
-## Claude Code (local)
+## Start here: stdio, no URL needed
 
 ```bash
-claude mcp add --scope user mekoy -- uv run --directory /path/to/mekoy python -m mekoy.mcp_server
+uv run --directory /path/to/mekoy-engine python -m mekoy.mcp_server
 ```
 
-Type `/mcp` (not `/mcp mekoy`). Enable Mekoy. New session.
+### Claude Code
 
-## Claude.ai connector (remote)
+```bash
+claude mcp add --scope user mekoy -- uv run --directory /path/to/mekoy-engine python -m mekoy.mcp_server
+```
 
-Customize → Connectors → Add custom connector → Web.
+Type `/mcp` (not `/mcp mekoy`). Enable Mekoy. Start a new session.
 
-MCP server URL: `https://mcp.mekoy.com/mcp` (or your ngrok URL + `/mcp`).
+### Cursor
 
-No sign-in for v1.
+Settings → MCP → add a command server, or put this in `~/.cursor/mcp.json`:
 
-## ChatGPT / Codex plugin
+```json
+{
+  "mcpServers": {
+    "mekoy": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/mekoy-engine", "python", "-m", "mekoy.mcp_server"]
+    }
+  }
+}
+```
+
+### Codex CLI
+
+Use the packaged plugin in `plugins/mekoy/`. `/plugins` after it is in a marketplace.
+
+## If your assistant needs a URL
+
+Start the local API and tunnel it as shown above, then point the connector at
+`https://<your-id>.ngrok.app/mcp`.
+
+### Claude.ai
+
+Customize → Connectors → Add custom connector → Web → your tunnel URL. There is no
+sign-in for the local server.
+
+### ChatGPT
 
 1. Enable developer mode.
-2. Settings → Plugins → create app **or** add custom MCP.
-3. MCP server URL: `https://mcp.mekoy.com/mcp`
-4. Or install the plugin package in `connectors/chatgpt/` via a marketplace once published.
+2. Settings → Plugins → create app, or add a custom MCP.
+3. Use your tunnel URL.
 
-Codex CLI: `/plugins` after the plugin is in a marketplace. Same MCP URL.
-
-## Cursor plugin
-
-Repo: `connectors/` with `.cursor-plugin/plugin.json`.
-
-Or Settings → MCP → URL `https://mcp.mekoy.com/mcp`.
-
-Local stdio still works via `~/.cursor/mcp.json` command `uv run python -m mekoy.mcp_server`.
-
-## Grok Build / Grok web / Grok Bot
+### Grok
 
 ```bash
-grok mcp add --transport http mekoy https://mcp.mekoy.com/mcp
+grok mcp add --transport http mekoy https://<your-id>.ngrok.app/mcp
 ```
 
-Grok web/iOS: add a custom MCP connector with that HTTPS URL (localhost is rejected; use a tunnel).
+Grok web and iOS reject localhost, so a tunnel is required there rather than optional.
 
-Plugin marketplace: submit `connectors/grok/` to `xai-org/plugin-marketplace` when ready.
+## What the assistant gets
 
-Grok Bot: ship `connectors/skills/compile/SKILL.md` as a bot skill plus the same MCP.
+Eight MCP tools. The assistant drives them; it supplies its own model. Mekoy does not
+need an API key from you, because the assistant you are already talking to is the model.
 
-## This repo's portal chat
-
-`/app/systems/new` is the hosted twin of these connectors. Same tools, same eval gate.
+The eval gate applies over MCP exactly as it does in the CLI: a compile is refused until
+the examples are approved.

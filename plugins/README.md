@@ -21,6 +21,6 @@ Do not use Plugin Creator to generate a new plugin. This folder is the plugin.
 
 ## Later: public directory
 
-1. Keep `https://mcp.mekoy.com/mcp` as the public HTTPS MCP.
+1. Stand up a public HTTPS MCP endpoint, since the local server is stdio-only.
 2. Open the [plugin submission portal](https://chatgpt.com/plugins), Create plugin, remote MCP submission.
 3. Publishing to your ChatGPT workspace (Personal → ⋯ → Publish) is **not** the universal Codex/ChatGPT directory.

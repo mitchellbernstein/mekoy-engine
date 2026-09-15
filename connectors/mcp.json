@@ -1,8 +1,5 @@
 {
   "mcpServers": {
-    "mekoy": {
-      "url": "https://mcp.mekoy.com/mcp"
-    },
     "mekoy-local": {
       "command": "uv",
       "args": [

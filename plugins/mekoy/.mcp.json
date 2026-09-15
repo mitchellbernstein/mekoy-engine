@@ -1,7 +1,15 @@
 {
   "mcpServers": {
     "mekoy": {
-      "url": "https://mcp.mekoy.com/mcp"
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        ".",
+        "python",
+        "-m",
+        "mekoy.mcp_server"
+      ]
     }
   }
 }

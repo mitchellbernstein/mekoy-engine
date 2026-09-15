@@ -3,14 +3,15 @@
   "version": "0.1.0",
   "description": "Compile an owned AI system for one job. No ML jargon required.",
   "author": {
-    "name": "Mekoy",
-    "email": "mitch@studioyeehaw.com",
-    "url": "https://mekoy.com"
+    "name": "Mekoy"
   },
-  "homepage": "https://mcp.mekoy.com/mcp",
-  "repository": "https://github.com/mitchellbernstein/mekoy",
+  "repository": "https://github.com/mitchellbernstein/mekoy-engine",
   "license": "Apache-2.0",
-  "keywords": ["mcp", "compiler", "owned-intelligence"],
+  "keywords": [
+    "mcp",
+    "compiler",
+    "owned-intelligence"
+  ],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
@@ -19,8 +20,10 @@
     "longDescription": "Describe a job. Mekoy compiles a specialist System you can host, self-host, or download. Training may be skipped.",
     "developerName": "Mekoy",
     "category": "Productivity",
-    "capabilities": ["Read", "Write"],
-    "websiteURL": "https://mekoy.com",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
     "defaultPrompt": [
       "Compile a specialist that extracts store, date, and line items from messy receipts.",
       "Use Mekoy to compile an owned system for this job. Ask how success will be checked, then compile."

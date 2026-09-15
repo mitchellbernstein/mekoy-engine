@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Compile an owned AI system for one job. No ML jargon required.",
   "author": { "name": "Mekoy" },
-  "homepage": "https://github.com/mitchellbernstein/mekoy",
+  "homepage": "https://github.com/mitchellbernstein/mekoy-engine",
   "license": "Apache-2.0",
   "keywords": ["mcp", "compiler", "owned-intelligence"],
   "skills": "./skills/",
