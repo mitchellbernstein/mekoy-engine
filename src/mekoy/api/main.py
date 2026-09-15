@@ -515,6 +515,9 @@ def create_app(*, completer: Completer | None = None) -> FastAPI:
     # One store for both doors: a System compiled through the connector has to be the
     # System the HTTP API can find, or the two surfaces describe different worlds.
     mcp_http.bind_context(lambda: ctx)
+    # A previous process may have died mid-compile, and its index may be gone while its
+    # Systems are still on disk. Both are silent, so they are fixed here, at startup.
+    _ = ctx.store.recover(Path(ctx.artifacts.root()))
     # Auth is mounted before CORS so CORS ends up outermost: a 401 still needs
     # CORS headers or a browser reports it as a network failure.
     application = FastAPI(

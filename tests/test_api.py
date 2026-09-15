@@ -16,7 +16,11 @@ from mekoy.api.models import (
     RunResponse,
     SystemCreated,
 )
-from mekoy.dataset import ExampleRecord, load_examples
+from mekoy.api.store import RunStatus, Store
+from mekoy.bundle import spec_for, write_bundle
+from mekoy.compile import CompileReport, Trial
+from mekoy.dataset import ExampleRecord, TaskExample, load_examples
+from mekoy.search import HarnessConfig
 
 _FIXTURE = Path("examples/bucko-restaurant/examples.jsonl")
 
@@ -601,3 +605,55 @@ def test_a_run_is_never_left_running(monkeypatch: pytest.MonkeyPatch) -> None:
     assert run is not None, "the run disappeared"
     assert run["status"] == "failed", f"run left as {run['status']!r}"
     assert "RuntimeError" in (run.get("error") or "")
+
+
+def test_recover_rebuilds_the_index_from_the_artifacts(tmp_path: Path) -> None:
+    """A System is a directory; the database is only how it is found.
+
+    Losing the index while the directories survive is recoverable, and was not: the API
+    would list nothing while the Systems sat on disk.
+    """
+    artifacts = tmp_path / "artifacts"
+    winner = Trial(
+        config=HarnessConfig(k_shot=2, retries=1, constrained=True), scores=()
+    )
+    report = CompileReport(
+        winner=winner, trials=(winner,), test=winner, stopped_early=False
+    )
+    spec = spec_for(report, task="restaurant call extraction", model_id="qwen2.5:7b")
+    rows = tuple(
+        TaskExample(text=f"call {i}", outcome={"restaurant": "R"}) for i in range(3)
+    )
+    _ = write_bundle(artifacts / "sys_rebuilt", spec, "card\n", examples=rows)
+
+    fresh = Store(db_path=tmp_path / "index.db")
+    assert fresh.list_systems() == (), "the index starts empty"
+    failed, recovered = fresh.recover(artifacts)
+
+    assert failed == 0
+    assert recovered == 1
+    record = fresh.get_system("sys_rebuilt")
+    assert record.winner is not None, "the harness travelled with the bundle"
+    assert len(record.examples) == 3, "and so did the labeled rows"
+
+
+def test_recover_fails_a_run_the_previous_process_left_running(tmp_path: Path) -> None:
+    """A run left `running` by a dead process is worse than a failed one.
+
+    The caller cannot tell a slow compile from a dead one, and nothing will ever move
+    it. Anything still running when a fresh process starts is orphaned by definition.
+    """
+    db = tmp_path / "index.db"
+    first = Store(db_path=db)
+    draft = first.create(task="a job", examples=(), task_name="restaurant")
+    _ = first.approve(draft.id)
+    run = first.create_run(draft.id, quick=True)
+    assert run.status is RunStatus.RUNNING
+
+    second = Store(db_path=db)  # a new process over the same file
+    failed, _recovered = second.recover(tmp_path / "nothing-here")
+
+    assert failed == 1
+    settled = second.get_run(run.id)
+    assert settled.status is RunStatus.FAILED
+    assert "interrupted" in (settled.error or "")

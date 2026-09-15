@@ -15,6 +15,7 @@ from mekoy.dataset import TaskExample
 from mekoy.errors import CompileError
 from mekoy.score import ExampleScore
 from mekoy.search import HarnessConfig
+from mekoy.spec import SystemSpec, load_spec
 from mekoy.tasks import task_by_name
 
 
@@ -190,6 +191,44 @@ def _trial_in(data: dict[str, object]) -> Trial:
     )
 
 
+#: The newest spec format this code understands. A bundle from the future is skipped
+#: rather than half-read, because a field whose meaning changed cannot be guessed.
+_SPEC_VERSION_KNOWN = 1
+
+
+def _examples_from(path: Path) -> tuple[TaskExample, ...]:
+    """Read a bundle's labeled rows back, if it carries any."""
+    if not path.is_file():
+        return ()
+    rows: list[TaskExample] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        text = payload.get("text")
+        if isinstance(text, str):
+            rows.append(TaskExample(text=text, outcome=payload.get("outcome")))
+    return tuple(rows)
+
+
+def _task_name_for(spec: SystemSpec) -> str:
+    """Which task class a recovered System was compiled with.
+
+    The spec does not name the class, so it is inferred from the job text the way the
+    loader infers it from a row. Getting this wrong would score a recovered System with
+    the wrong gate.
+    """
+    text = spec.task.lower()
+    if "receipt" in text:
+        return "receipt"
+    if "intent" in text or "categor" in text or "classif" in text:
+        return "banking77"
+    return "restaurant"
+
+
 class Store:
     """Systems and runs, optionally surviving the process that made them.
 
@@ -210,6 +249,88 @@ class Store:
             self._db = sqlite3.connect(str(db_path), check_same_thread=False)
             self._db.executescript(_SCHEMA)
             self._read_back()
+
+    def recover(self, artifacts_root: Path) -> tuple[int, int]:
+        """Fix up what a previous process left behind, at startup.
+
+        Two things go wrong when a process dies, and both are silent.
+
+        A run that was in flight is still recorded as `running`, and nothing will ever
+        move it: the caller cannot tell a slow compile from a dead one. Any run still
+        `running` when a fresh process starts is orphaned by definition, because this
+        process has run nothing yet.
+
+        And the index can be lost while the Systems it described are still on disk. A
+        compiled System is a directory; the database is only how it is found. When the
+        index is empty the directories are read back, which is what makes the artifacts
+        the source of truth rather than a cache of the database.
+
+        Returns (runs_failed, systems_recovered).
+        """
+        if self._db is None:
+            return (0, 0)
+        failed = 0
+        for (run_id,) in list(
+            self._db.execute(
+                "SELECT id FROM runs WHERE status = ?", (RunStatus.RUNNING,)
+            )
+        ):
+            _ = self.fail_run(
+                run_id,
+                "interrupted: the process running this compile is gone",
+            )
+            failed += 1
+        recovered = self._rebuild_from(artifacts_root) if not self._systems else 0
+        return (failed, recovered)
+
+    def _rebuild_from(self, artifacts_root: Path) -> int:
+        """Read Systems back off disk when the index is empty.
+
+        A bundle written before `spec_version` and `examples.jsonl` existed
+        restores as a compiled System without its examples, which is a real
+        limitation and the reason those fields were added. Newer ones restore whole.
+        compiled System without its examples, which is a real limitation and the reason
+        those fields were added. Newer bundles restore whole.
+        """
+        if not artifacts_root.is_dir():
+            return 0
+        found = 0
+        for directory in sorted(artifacts_root.glob("sys_*")):
+            spec_path = directory / "spec.json"
+            if not spec_path.is_file():
+                continue
+            try:
+                spec = load_spec(spec_path)
+            except CompileError:
+                continue
+            if spec.spec_version > _SPEC_VERSION_KNOWN:
+                continue
+            examples = _examples_from(directory / "examples.jsonl")
+            report_path = directory / "report.txt"
+            report = (
+                report_path.read_text(encoding="utf-8") if report_path.is_file() else ""
+            )
+            winner = Trial(
+                config=HarnessConfig(
+                    k_shot=spec.k_shot,
+                    retries=spec.retries,
+                    constrained=True,
+                    model=spec.model_id,
+                ),
+                scores=(),
+            )
+            record = CompiledSystem(
+                id=directory.name,
+                task=spec.task,
+                task_name=_task_name_for(spec),
+                examples=examples,
+                winner=winner,
+                report=report,
+            )
+            self._systems[record.id] = record
+            self._write_system(record)
+            found += 1
+        return found
 
     # --- persistence -----------------------------------------------------
 
