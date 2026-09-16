@@ -6,7 +6,9 @@ from typing import ClassVar, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from mekoy.api.store import Phase, RunRecord, RunStatus, SystemRecord, phase_of
+from mekoy.jobs import JobDefinition
 from mekoy.outcome import RestaurantOutcome
+from mekoy.spec import Slos
 
 #: Model host defaults. In a container `127.0.0.1` is the container, so a
 #: deployment has to say where its model lives; a caller may also override either
@@ -46,6 +48,12 @@ class CreateSystemRequest(BaseModel):
     #: Three, not two: the split needs one row for train, dev, and test. Allowing
     #: two here only moved the failure to the eval call.
     examples: tuple[ExampleRow, ...] = Field(min_length=3)
+    #: A job the caller defined, when the fields and the checks are theirs rather than
+    #: one of the shipped classes. It is what makes "what should come out" and "what
+    #: is a dangerous answer" real answers: the fields become the schema every example
+    #: is validated against and the checks become the gate every candidate is rejected
+    #: by. Omitted means the shipped classes still apply, unchanged.
+    definition: JobDefinition | None = None
 
 
 class EvalRequest(BaseModel):
@@ -62,6 +70,16 @@ class CompileRequest(BaseModel):
     quick: bool = True
     model: str = _DEFAULT_MODEL
     base_url: str = _DEFAULT_URL
+    #: The bar the caller set, not ours. The search stops as soon as a candidate meets
+    #: it and reports that it did, so "how good is good enough" changes how long a
+    #: compile runs. Omitted means search the space and report the best, which is what
+    #: every existing caller gets.
+    slos: Slos | None = None
+    #: Base models to price against each other, in order. Each is served by the same
+    #: OpenAI-compatible endpoint as `model`; the report names every one that was tried,
+    #: so the caller sees what they were choosing between. Omitted or empty means the
+    #: single model above, which is the behaviour before this field existed.
+    models: tuple[str, ...] = ()
 
 
 class InvokeRequest(BaseModel):
@@ -206,6 +224,30 @@ class ComparisonOut(BaseModel):
     faster: str
     n_test: int
     verdict: str
+
+
+class FailureOut(BaseModel):
+    """One failed compile, as a host reads it."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+    run_id: str
+    system_id: str
+    error: str
+    at: str
+
+
+class MetricsResponse(BaseModel):
+    """Operational counters and recent compile failures for a host.
+
+    Deliberately plain JSON rather than Prometheus text: a self-hoster runs one
+    process and wants to read the numbers, not run a scraper beside it.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+    counters: dict[str, int]
+    failures: tuple[FailureOut, ...] = ()
+    metering: dict[str, int] = Field(default_factory=dict)
+    scope: str = "all"
 
 
 class ChatMessage(BaseModel):

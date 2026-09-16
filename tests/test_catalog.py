@@ -72,7 +72,7 @@ def test_an_unverifiable_score_refuses_publication() -> None:
 
 
 def test_publication_needs_both_confirmations(tmp_path: Path) -> None:
-    """PLAN §24a asks twice, and one answer must not stand in for the other."""
+    """Publication asks twice, and one answer must not stand in for the other."""
     for opt_in in (
         OptIn(consented=True),
         OptIn(acknowledged_data_becomes_public=True),
@@ -90,7 +90,7 @@ def test_a_missing_licence_is_refused(tmp_path: Path) -> None:
 
 
 def test_unattested_data_is_refused(tmp_path: Path) -> None:
-    """PLAN §24a: no publication without proving the data was licensed."""
+    """No publication without proving the data was licensed."""
     checked = review(
         _spec(data=""),
         opt_in=_opted_in(),
@@ -159,7 +159,7 @@ def test_the_catalog_refuses_an_unreviewed_system(tmp_path: Path) -> None:
 
 
 def test_publishing_and_withdrawing(tmp_path: Path) -> None:
-    """PLAN §24a requires revoke to be possible."""
+    """Revoke has to be possible."""
     catalog = Catalog()
     checked = review(
         _spec(),

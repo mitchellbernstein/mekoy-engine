@@ -1,6 +1,6 @@
 """Routing a job to a listed System, or refusing to.
 
-PLAN §24b draws a boundary this module has to respect:
+A boundary this module has to respect:
 
     Do not train the orchestrator until there are enough listed Systems that random
     choice is worse than a router. Until then, `POST /v1/run` requires `system=`.
@@ -10,10 +10,10 @@ given a job and a caller's allowlist/denylist/named set, which listed Systems ar
 eligible, which is best, and - the part that matters most - when the honest answer is
 that none of them fits.
 
-Refusing is a first-class outcome rather than an error path. PLAN clause 3: "If nothing
-fits: refuse or offer compile, do not guess." A router that always returns something
-returns the wrong thing confidently, and the caller cannot tell "best available" from
-"nothing here was remotely relevant".
+Refusing is a first-class outcome rather than an error path: if nothing fits, refuse or
+offer a compile, never guess. A router that always returns something returns the wrong
+thing confidently, and the caller cannot tell "best available" from "nothing here was
+remotely relevant".
 
 The blocker on honest fit is a per-task difficulty baseline, which does not exist.
 Without one a score has no reference point: 0.94 tells you nothing about whether 0.94 is
@@ -64,8 +64,8 @@ class Refusal(StrEnum):
 class Selectors:
     """How a caller narrows what may be picked.
 
-    Mirrors PLAN §24b: pin one System, pin a set, allowlist/denylist by id, or send
-    nothing and use the public catalog.
+    Mirrors the routing contract: pin one System, pin a set, allowlist/denylist by id,
+    or send nothing and use the public catalog.
     """
 
     #: Pin one System by id. Routing is off; this id is used or refused.
@@ -142,7 +142,7 @@ def route(  # noqa: PLR0911 - each refusal is a distinct, named outcome
 
     A pinned `system` bypasses the public pool: the caller named it, so it is used if it
     exists, whatever its visibility. Everything else routes across public listings only,
-    because PLAN is explicit that private Systems never enter the global pool.
+    because private Systems never enter the global pool.
     """
     chosen = selectors or Selectors()
     every = catalog.listings()

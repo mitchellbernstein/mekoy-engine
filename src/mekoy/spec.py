@@ -57,11 +57,11 @@ class SystemSpec(BaseModel):
     #: Bumped when the meaning of a field changes. A reader must refuse a newer one.
     spec_version: int = Field(default=1, ge=1)
     task: str = Field(min_length=1)
-    #: What the base model may be used for. PLAN §24a requires a listing to carry it:
-    #: some weights cannot be sold as weights at all, and a caller cannot know what they
+    #: What the base model may be used for. A listing has to carry it: some weights
+    #: cannot be sold as weights at all, and a caller cannot know what they
     #: may do with a result without it. Empty means unknown, which the review refuses.
     license: str = ""
-    #: Where the labeled examples came from. PLAN §24a: no publication when this cannot
+    #: Where the labeled examples came from. No publication when this cannot
     #: be shown to be licensed. Empty means unattested, which is also a refusal.
     data_source: str = ""
     json_schema: dict[str, object] = Field(

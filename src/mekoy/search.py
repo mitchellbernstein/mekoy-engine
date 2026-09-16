@@ -1,7 +1,7 @@
 """Budgeted harness search with SLO gates and a Pareto winner rule.
 
-PLAN §15: staged ASHA with Pareto secondary (quality, $, latency), stopping on
-the SLO. This is the local, CPU-sized form of it: a candidate pool over
+Staged ASHA with Pareto secondary (quality, $, latency), stopping on the SLO.
+This is the local, CPU-sized form of it: a candidate pool over
 {k-shot, retries, decode, prompt}, evaluated stage by stage, pruned on the hard
 gate, ranked on the Pareto front, and stopped the moment an SLO-clearing
 candidate appears.
@@ -48,16 +48,16 @@ _DEFAULT_TRIALS = 5
 _CONSENSUS_TEMPERATURE = 0.7
 #: Fields that decide the safety call, and therefore get voted on.
 _CLOSED_FIELDS = ("intent", "status", "party_size", "booked")
-#: Minibatch size for the first ASHA rung (PLAN §15.6: n=16-32).
+#: Minibatch size for the first ASHA rung (16-32 is the usual band).
 _MINIBATCH = 16
-#: Successive-halving prune factor (PLAN §15.7: ASHA eta).
+#: Successive-halving prune factor.
 _PRUNE_ETA = 2
 #: Below this many dev rows, staging costs more than it saves.
 _STAGING_FLOOR = 12
 _PHRASE_FIELDS = ("restaurant", "when", "under_name")
 #: Shots are the cheapest lever on quality, so the default space reaches higher
-#: than the old cap of 4. PLAN §15.5 brackets shots at 0 and 4; a 60-row train
-#: slice can afford more.
+#: than the old cap of 4. The usual ladder brackets shots at 0 and 4; a 60-row
+#: train slice can afford more.
 _MAX_K = 8
 _K_LADDER = (0, 2, 4, 8)
 _MIN_ROWS_FOR_PROMPT = 8
@@ -551,7 +551,7 @@ def _rung_size(dev: tuple[ExampleRecord, ...]) -> int:
 
 
 def _prune_keep(n: int) -> int:
-    """How many candidates survive a rung (PLAN §15.7, eta=2)."""
+    """How many candidates survive a rung (eta=2)."""
     return max(1, n // _PRUNE_ETA)
 
 
@@ -650,7 +650,7 @@ def search(  # noqa: PLR0913 - the search entry point names its knobs
     Two rungs when the dev slice is big enough to afford one: every candidate is
     priced on a minibatch, then only survivors earn a full dev pass. Both loops
     check the SLO after each candidate, so a compile that has already won stops
-    instead of spending the rest of its budget (PLAN §15.12).
+    instead of spending the rest of its budget.
 
     `on_event` is called with (kind, data) as the search progresses, and is the only
     reason a caller can watch a compile happen. It is optional so the search stays

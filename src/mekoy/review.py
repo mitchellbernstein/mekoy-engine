@@ -1,6 +1,6 @@
 """Whether a System may be published, and what a reviewer can prove about it.
 
-PLAN §24a names the review steps: license of the base model, training-data
+The review steps are: license of the base model, training-data
 attestation, a harness sandbox check, our own eval, and a policy scan. This module
 decides which of them can be settled from the artifact, and refuses publication when
 one cannot.
@@ -30,18 +30,20 @@ __all__ = [
     "Finding",
     "OptIn",
     "Review",
+    "SafetyDecision",
     "review",
 ]
 
 
 class Check(StrEnum):
-    """The review steps from PLAN §24a, in the order a reviewer would run them."""
+    """The review steps, in the order a reviewer would run them."""
 
     OPT_IN = "opt_in"
     LICENSE = "license"
     ATTESTATION = "attestation"
     VERIFIABLE = "verifiable"
     HARNESS = "harness"
+    SAFETY = "safety"
 
 
 class Decision(StrEnum):
@@ -67,8 +69,61 @@ class Finding:
 
 
 @dataclass(frozen=True, slots=True)
+class SafetyDecision:
+    """What is known about a System's safety scan, at the moment of review.
+
+    Two fields rather than one, because "was it scanned" and "was the scan acknowledged"
+    are different questions and collapsing them would let a scan nobody read open the
+    gate. An unscanned System is refused; a scanned System that flagged a category is
+    refused until the publisher acknowledges *that* scan.
+
+    The design follows Anthropic's RSP, which is explicit that the commitment is to
+    act on the result rather than merely to obtain one. A harness that measures risk and
+    then lets you publish anyway, unanswered, is the arrangement they name as
+    insufficient.
+    """
+
+    scanned: bool = False
+    #: The publisher was shown the findings and accepted them anyway. This is not a
+    #: bypass: it names, in the refusal text, exactly which category triggered it, so
+    #: the acknowledgment is of a specific finding rather than of risk in general.
+    acknowledged: bool = False
+    #: Categories that produced a finding, as short labels.
+    flagged: tuple[str, ...] = ()
+    #: Why no scan is on file, when there is none.
+    unavailable: str = ""
+
+    @property
+    def blocked(self) -> bool:
+        """Whether this alone stops publication."""
+        if not self.scanned:
+            return True
+        return bool(self.flagged) and not self.acknowledged
+
+    def detail(self) -> str:
+        """The refusal text, naming what triggered it."""
+        if not self.scanned:
+            return (
+                "no safety scan on file, so it is unknown whether this System "
+                "reliably produces harmful content on demand"
+                + (f": {self.unavailable}" if self.unavailable else "")
+            )
+        if not self.flagged:
+            return "scanned: no category met its evidence bar on the labeled rows"
+        named = ", ".join(self.flagged)
+        if self.acknowledged:
+            return f"scanned: publisher acknowledged findings in {named}"
+        return (
+            f"the safety scan flagged {named}, and publishing a System that reliably "
+            "produces that on demand needs an explicit acknowledgement of this scan - "
+            "re-scan and pass the acknowledgement, or fix the labeled rows the finding "
+            "quotes"
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class OptIn:
-    """The two confirmations PLAN §24a requires.
+    """The two confirmations publication requires.
 
     Two separate flags rather than one, because the point of asking twice is that the
     first answer is often "yes, obviously" and the second is where someone reads what
@@ -111,19 +166,26 @@ class Review:
         return f"refused: {reasons}"
 
 
-def review(
+def review(  # noqa: PLR0913 - each review step is a named parameter
     spec: SystemSpec,
     *,
     opt_in: OptIn,
     bundle_dir: Path | None = None,
     score_is_recomputable: bool = False,
     harness_tools: tuple[str, ...] = (),
+    safety: SafetyDecision | None = None,
 ) -> Review:
     """Run every review step and decide.
 
     `score_is_recomputable` is passed in rather than computed here, because the
     thing that answers it is `verify-bundle`, which lives with the evaluator. This
     module's job is to refuse when the answer is no, not to be the answer.
+
+    `safety` is likewise passed in, for the same reason: the scan runs models, and a
+    review that ran one would be a review that could not be read off an artifact. An
+    absent scan is treated as an unscanned System and refused - the default is the
+    conservative one, because the failure this gate exists to prevent is a harmful
+    specialist listing silently.
 
     Everything else is read from the spec, so a reviewer and a bundle cannot disagree
     about what was attested.
@@ -134,11 +196,27 @@ def review(
         _check_attestation(spec),
         _check_verifiable(score_is_recomputable, bundle_dir),
         _check_harness(harness_tools),
+        _check_safety(safety or SafetyDecision()),
     )
     decision = (
         Decision.LISTABLE if all(f.passed for f in findings) else Decision.REFUSED
     )
     return Review(findings=findings, decision=decision)
+
+
+def _check_safety(safety: SafetyDecision) -> Finding:
+    """A listed System has been scanned for reliable harmful output, or it is refused.
+
+    The refusal names the category that triggered it, and the publisher can acknowledge
+    that specific scan. It is not a wall: the acknowledgment path is how a System with a
+    defensible finding - say a person-targeting job with a real lawful purpose and the
+    paperwork - gets listed by someone who read the finding and accepted it.
+
+    What it is not is silent. Every path through this function either reports a clean
+    scan or names what was flagged, so a listing cannot enter the catalog while the
+    reason it might be harmful goes unmentioned.
+    """
+    return Finding(Check.SAFETY, passed=not safety.blocked, detail=safety.detail())
 
 
 def _check_opt_in(opt_in: OptIn) -> Finding:
@@ -155,7 +233,7 @@ def _check_opt_in(opt_in: OptIn) -> Finding:
 def _check_license(spec: SystemSpec) -> Finding:
     """A listing must carry what its base model is licensed under.
 
-    PLAN §24a: some weights cannot be sold as weights at all, so a listing without a
+    Some weights cannot be sold as weights at all, so a listing without a
     licence cannot be routed to honestly - the caller has no way to know what they are
     allowed to do with the result.
     """
@@ -173,7 +251,7 @@ def _check_license(spec: SystemSpec) -> Finding:
 def _check_attestation(spec: SystemSpec) -> Finding:
     """Where the training data came from has to be stated, not assumed.
 
-    PLAN §24a is explicit: no publication of a System whose training data cannot be
+    No publication of a System whose training data cannot be
     shown to be licensed. An empty attestation is a refusal, never a pass.
 
     Read from the spec rather than taken as an argument, so there is one source of
@@ -229,7 +307,7 @@ def _check_verifiable(score_is_recomputable: bool, bundle_dir: Path | None) -> F
 def _check_harness(harness_tools: tuple[str, ...]) -> Finding:
     """A System's harness must not reach out without the caller knowing.
 
-    PLAN §24a asks for a sandbox check because a harness that opens a socket or a file
+    A sandbox check is required because a harness that opens a socket or a file
     is doing something the caller did not ask for. This repository's v1 harness is a
     schema, a decode, a verify, and a retry loop - it has no tools - so the expected
     answer is an empty set, and anything present is reported rather than allowed.

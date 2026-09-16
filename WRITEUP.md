@@ -414,7 +414,7 @@ plausible-looking count hiding a broken sample.
 Reflection is staged after the candidate pool: survivors get a light reflective
 pass capped at 50-150 metric calls, using a larger model as the reflection LM. The
 wrapper is built on DSPy **3.3.1** as an optional
-extra, because §35 warns that `spec.json` must stay loadable without DSPy.
+extra, because `spec.json` must stay loadable and invokable without DSPy.
 
 The integration decision that matters: **GEPA optimises against our metric, not
 DSPy's.** The metric parses a reply through the task's schema and gate, scores it

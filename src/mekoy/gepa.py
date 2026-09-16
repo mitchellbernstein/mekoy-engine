@@ -1,12 +1,12 @@
 """GEPA-light: reflective prompt evolution, bounded by a metric-call cap.
 
-This runs after the candidate pool: survivors get a light reflective pass,
-cap max_metric_calls 50-150, reflection LM = large open model."* 41.8 asks for the
-wrapper. This is that stage, built on DSPy 3.3 as the plan specifies.
+This stage runs after the candidate pool: survivors get a light reflective pass,
+with a metric-call cap of 50-150 and a large open model as the reflection LM. This
+is that stage, built on DSPy 3.3.
 
 Three decisions worth stating:
 
-- **Optional dependency.** The risk is DSPy lock-in: a System.json
+- **Optional dependency.** The risk is DSPy lock-in: "System.json
   must be loadable without DSPy for invoke." DSPy lives in the `gepa` extra and is
   imported lazily, so the core compile path never touches it.
 - **GEPA is judged by our metric.** The metric parses a reply through the task's
@@ -42,10 +42,10 @@ __all__ = [
 #: GEPA is capped at 50-150 metric calls. The floor of that band keeps a
 #: laptop run bounded while still giving reflection something to work with.
 #:
-#: GEPA wants auto=light with max_metric_calls 50-150, but dspy
-#: rejects both at once: "Exactly one of max_metric_calls, max_full_evals, auto
-#: must be set." The cap is the part that matters, because it is what bounds a
-#: compile, so that is the default and `auto` is opt-in instead.
+#: Both a cap and `auto` are wanted, but dspy rejects them together: "Exactly one of
+#: max_metric_calls, max_full_evals, auto must be set." The cap is the part that
+#: matters, because it is what bounds a compile, so that is the default and `auto`
+#: is opt-in instead.
 DEFAULT_METRIC_CALLS = 60
 #: `auto` level, used only when `max_metric_calls` is None.
 DEFAULT_AUTO = "light"
@@ -197,8 +197,8 @@ def optimize(  # noqa: PLR0913 - the stage names its own knobs
             max_tokens=900,
             temperature=0.7,
         ),
-        # Pareto over complementary traces, the discipline this copies from
-        # GEPA to avoid collapsing onto a single behaviour.
+        # Pareto over complementary traces, the discipline that keeps a search from
+        # collapsing onto a single behaviour.
         candidate_selection_strategy="pareto",
         # A local server serialises generation; threads only add contention and
         # non-determinism here.

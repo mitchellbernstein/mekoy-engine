@@ -18,7 +18,7 @@ from mekoy.errors import CompileError
 from mekoy.outcome import RestaurantOutcome
 from mekoy.spec import SPEC_VERSION, OwnershipFlags, Slos, SystemSpec, write_spec
 
-#: A downloaded System runs locally and can leave our hosts. PLAN §31.
+#: A downloaded System runs locally and can leave our hosts.
 _OWNED = OwnershipFlags(runtime_owned=True, downloadable=True)
 
 #: Where the harness is installed from. A bundle tells a recipient to install something,

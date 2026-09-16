@@ -1,6 +1,6 @@
 """Catalog and orchestrator routes.
 
-The control plane's third door: PLAN §0 clause 3 says one URL can hit a private System,
+The control plane's third door: one URL can hit a private System,
 a catalog System by id, or the orchestrator that routes a *job* to the best listed
 System the caller allowed. This module is the second and third of those.
 
@@ -19,11 +19,12 @@ from typing import Annotated, ClassVar
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, ConfigDict
 
-from mekoy.api.main import AppContext, get_ctx
+from mekoy.api.auth import Principal
+from mekoy.api.main import AppContext, get_ctx, get_principal, owner_scope
 from mekoy.catalog import ListingError, Visibility
 from mekoy.errors import CompileError
 from mekoy.orchestrator import Refusal, RouteDecision, Selectors, route
-from mekoy.review import OptIn, review
+from mekoy.review import OptIn, SafetyDecision, review
 from mekoy.spec import load_spec
 
 _router = APIRouter()
@@ -37,9 +38,14 @@ _UNKNOWN_MODEL = "unrecorded"
 class PublishRequest(BaseModel):
     """Ask for one System to be listed.
 
-    Both confirmations are separate fields on purpose: PLAN §24a asks twice because
+    Both confirmations are separate fields on purpose: publication asks twice because
     the first answer is often reflexive and the second is where someone reads what they
     are agreeing to.
+
+    The safety fields are the third confirmation, and they are separate for the same
+    reason. `safety_scanned` says a scan was run; `safety_acknowledged` says the
+    publisher was shown a specific finding and accepted it. One flag cannot tell those
+    apart, and a publisher who ticked one box has read nothing.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="ignore")
@@ -51,6 +57,16 @@ class PublishRequest(BaseModel):
     #: score is unverifiable, which refuses publication.
     bundle_verified: bool = False
     harness_tools: tuple[str, ...] = ()
+    #: A scan was run and its findings are on file. Absent refuses publication, because
+    #: an unscanned System is not a System nobody worried about - it is one nobody
+    #: measured.
+    safety_scanned: bool = False
+    #: The publisher read the findings named in the refusal and accepted them anyway.
+    safety_acknowledged: bool = False
+    #: The categories the scan flagged, as the labels a scan report carries. Passed in
+    #: rather than re-derived here so the refusal names what actually triggered it
+    #: instead of a second guess at the same question.
+    safety_flagged: tuple[str, ...] = ()
 
 
 class ReviewOut(BaseModel):
@@ -134,8 +150,10 @@ def _to_out(listing: object) -> ListingOut:
 def catalog(ctx: Annotated[AppContext, Depends(get_ctx)]) -> CatalogOut:
     """The public pool, best reviewed score first.
 
-    Empty is the honest answer today: nothing can be listed until its score is
-    recomputable, and the note says so rather than leaving a caller to guess.
+    Unscoped on purpose, and that is a design choice rather than a missing filter: a
+    listing only exists once its author opted in twice and the review passed, and the
+    point of publishing is that any caller may route to it. An unpublished System
+    cannot appear here, because `Catalog.public()` reads only published listings.
     """
     listings = tuple(_to_out(entry) for entry in ctx.catalog.public())
     note = "" if listings else str(_why_empty(ctx))
@@ -162,9 +180,16 @@ def publish(
     system_id: str,
     body: PublishRequest,
     ctx: Annotated[AppContext, Depends(get_ctx)],
+    principal: Annotated[Principal, Depends(get_principal)],
 ) -> ReviewOut:
-    """Submit a compiled System for listing. Refusals are the common case, by design."""
-    record = ctx.store.require_compiled(system_id)
+    """Submit a compiled System for listing. Refusals are the common case, by design.
+
+    Owner-filtered, because this is the write path: without the filter a tenant could
+    publish under another tenant's system id, which is worse than reading one - the
+    listing is harder to walk back once somebody has routed to it.
+    """
+    owner = owner_scope(principal)
+    record = ctx.store.require_compiled(system_id, owner=owner)
     spec_path = None
     try:
         bundle_dir = ctx.artifacts.root() / system_id
@@ -195,6 +220,11 @@ def publish(
         else None,
         score_is_recomputable=body.bundle_verified,
         harness_tools=body.harness_tools,
+        safety=SafetyDecision(
+            scanned=body.safety_scanned,
+            acknowledged=body.safety_acknowledged,
+            flagged=body.safety_flagged,
+        ),
     )
     if not checked.listable:
         return ReviewOut(
@@ -268,6 +298,12 @@ def route_job(
 
     Refusing is the point. A router that always returns something returns the wrong
     thing confidently, and a caller cannot tell "best available" from "nothing fits".
+
+    Unscoped on purpose: the only Systems a router may see are *published* listings,
+    and publication is a deliberate, double-confirmed, reviewed act whose whole point
+    is that strangers may call the result. An unpublished System is not in
+    `catalog.listings()` at all, so this route cannot read one - which is why it needs
+    no owner filter, unlike the store-backed routes.
     """
     outcome = route(
         ctx.catalog,

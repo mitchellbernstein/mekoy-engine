@@ -1,6 +1,6 @@
 """Where a downloadable bundle is written.
 
-PLAN §41.17 asks for object storage. A hosted bucket needs an account, so what
+Object storage is what a hosted bundle wants. A hosted bucket needs an account, so what
 ships is the half that does not: a tiny store protocol with a filesystem backend,
 which is what the local control plane needs and what the tests can exercise.
 

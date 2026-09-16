@@ -1,7 +1,7 @@
 """Training: gated, optional, and only when the eval says the System is short.
 
 Training is a rule, not an option: if the compiled System is below the gate, one
-LoRA SFT at rank 8-16 runs. The report line
+LoRA SFT at rank 8-16 runs, then GEPA-light on the adapter. The report line
 *"training: skipped"* is a first-class outcome, so the decision to train has to be
 derived from the measured result rather than picked by hand.
 

@@ -13,10 +13,11 @@ from typing import assert_never
 from mekoy.compile import CompileReport, Trial, format_report
 from mekoy.dataset import TaskExample
 from mekoy.errors import CompileError
+from mekoy.jobs import JobDefinition
 from mekoy.score import ExampleScore
 from mekoy.search import HarnessConfig
 from mekoy.spec import SPEC_VERSION, SystemSpec, load_spec
-from mekoy.tasks import task_by_name
+from mekoy.tasks import Task, task_by_name, task_from_definition
 
 
 class Phase(StrEnum):
@@ -53,6 +54,14 @@ class DraftSystem:
     #: Task class name (`restaurant`, `receipt`, `banking77`). The job text is
     #: `task`; this is which compiler path to run.
     task_name: str = "restaurant"
+    #: Which principal owns this row. Empty means it was written before ownership
+    #: existed, which only local mode can reach.
+    principal_id: str = ""
+    #: A job the caller defined, when they did not accept one of the shipped task
+    #: classes. It is data, not a name, because the fields and the checks are what
+    #: the gate scores against and a name cannot carry them. None means the shipped
+    #: `task_name` class, which is what every pre-existing row is.
+    definition: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +72,8 @@ class ApprovedSystem:
     task: str
     examples: tuple[TaskExample, ...]
     task_name: str = "restaurant"
+    principal_id: str = ""
+    definition: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,9 +86,28 @@ class CompiledSystem:
     winner: Trial
     report: str
     task_name: str = "restaurant"
+    principal_id: str = ""
+    definition: dict[str, object] | None = None
 
 
 type SystemRecord = DraftSystem | ApprovedSystem | CompiledSystem
+
+
+@dataclass(frozen=True, slots=True)
+class SafetyCheck:
+    """One check a user added to a System's safety scan.
+
+    `category` is which of the engine's five the check measures against; `text` is the
+    user's own text to shape the probe after, empty when they picked the category and
+    left the shaping to their rows. A check is a *selection*, not a new taxonomy: the
+    engine's categories are the ones it can realise, and a user choosing among them is
+    the user saying what they want measured, which is the thing they are owed before a
+    rate means anything to them.
+    """
+
+    system_id: str
+    category: str
+    text: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +125,20 @@ class RunRecord:
     report: str | None = None
     winner: Trial | None = None
     error: str | None = None
+    #: Which principal opened this run. Concurrent-compile quota counts these.
+    principal_id: str = ""
+
+
+def task_for(record: SystemRecord) -> Task:
+    """The task this System is compiled and scored against.
+
+    A caller-defined job is rebuilt from its definition, so the fields and checks the
+    user authored are the ones the gate runs. A shipped class is looked up by name,
+    which is what every row written before definitions existed stores.
+    """
+    if record.definition is None:
+        return task_by_name(record.task_name)
+    return task_from_definition(JobDefinition.model_validate(record.definition))
 
 
 def phase_of(record: SystemRecord) -> Phase:
@@ -114,26 +158,47 @@ def phase_of(record: SystemRecord) -> Phase:
 #: truth for the System itself, so a user can copy the folder and leave.
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS systems (
-    id        TEXT PRIMARY KEY,
-    task      TEXT NOT NULL,
-    task_name TEXT NOT NULL,
-    phase     TEXT NOT NULL,
-    examples  TEXT NOT NULL,
-    winner    TEXT,
-    report    TEXT
+    id           TEXT PRIMARY KEY,
+    task         TEXT NOT NULL,
+    task_name    TEXT NOT NULL,
+    phase        TEXT NOT NULL,
+    examples     TEXT NOT NULL,
+    winner       TEXT,
+    report       TEXT,
+    principal_id TEXT NOT NULL DEFAULT '',
+    definition   TEXT
 );
 CREATE TABLE IF NOT EXISTS runs (
-    id         TEXT PRIMARY KEY,
-    system_id  TEXT NOT NULL,
-    status     TEXT NOT NULL,
-    quick      INTEGER NOT NULL,
-    model      TEXT NOT NULL,
-    report     TEXT,
-    winner     TEXT,
-    error      TEXT,
-    seq        INTEGER NOT NULL
+    id           TEXT PRIMARY KEY,
+    system_id    TEXT NOT NULL,
+    status       TEXT NOT NULL,
+    quick        INTEGER NOT NULL,
+    model        TEXT NOT NULL,
+    report       TEXT,
+    winner       TEXT,
+    error        TEXT,
+    seq          INTEGER NOT NULL,
+    principal_id TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS safety_checks (
+    system_id    TEXT NOT NULL,
+    category     TEXT NOT NULL,
+    text         TEXT NOT NULL,
+    seq          INTEGER NOT NULL,
+    UNIQUE (system_id, category, text)
 );
 """
+
+#: Columns added after the first release, as `(table, column, declaration)`. An
+#: existing SQLite file has to be altered rather than recreated, because recreating
+#: it would drop the index a running deployment depends on.
+_ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("systems", "principal_id", "TEXT NOT NULL DEFAULT ''"),
+    ("runs", "principal_id", "TEXT NOT NULL DEFAULT ''"),
+    # Nullable on purpose: every row written before a caller could define a job has
+    # no definition and is scanned with its shipped `task_name` class.
+    ("systems", "definition", "TEXT"),
+)
 
 
 def _outcome_out(outcome: object) -> object:
@@ -144,14 +209,24 @@ def _outcome_out(outcome: object) -> object:
     return outcome
 
 
-def _outcome_in(task_name: str, data: object) -> object:
+def _outcome_in(
+    task_name: str,
+    data: object,
+    definition: dict[str, object] | None = None,
+) -> object:
     """Rebuild an example's label using the task's own model.
 
     The label has to come back as the type the task's gate and scorer expect, and the
     task name stored beside it is what says which type that is. Without it a reloaded
-    System would score its own examples differently from the run that produced it.
+    System would score its own examples differently from the run that produced it. A
+    caller-defined job is rebuilt from its definition for the same reason: its label
+    type exists nowhere in the shipped registry.
     """
-    model = getattr(task_by_name(task_name), "model", None)
+    if definition is not None:
+        task = task_from_definition(JobDefinition.model_validate(definition))
+    else:
+        task = task_by_name(task_name)
+    model = getattr(task, "model", None)
     validate = getattr(model, "model_validate", None)
     if callable(validate) and isinstance(data, dict):
         return validate(data)
@@ -243,13 +318,35 @@ class Store:
         """Start empty, or from disk when a database is given."""
         self._systems: dict[str, SystemRecord] = {}
         self._runs: dict[str, RunRecord] = {}
+        #: Added safety checks, keyed by System then by (category, text). A dict of
+        #: dicts because the key is the pair, so re-adding one is idempotent.
+        self._safety_checks: dict[str, dict[tuple[str, str], SafetyCheck]] = {}
         self._seq = 0
         self._db: sqlite3.Connection | None = None
         if db_path is not None:
             db_path.parent.mkdir(parents=True, exist_ok=True)
             self._db = sqlite3.connect(str(db_path), check_same_thread=False)
             self._db.executescript(_SCHEMA)
+            self._migrate()
             self._read_back()
+
+    def _migrate(self) -> None:
+        """Add columns to a file written by an earlier version.
+
+        `CREATE TABLE IF NOT EXISTS` is a no-op on an existing table, so a database
+        from before ownership existed keeps its old shape and every statement naming
+        `principal_id` fails. Adding the missing column is the whole migration: the
+        default leaves old rows present and unowned, which is what local mode wants.
+        """
+        if self._db is None:
+            return
+        for table, column, declaration in _ADDED_COLUMNS:
+            have = {row[1] for row in self._db.execute(f"PRAGMA table_info({table})")}
+            if column not in have:
+                with self._db:
+                    self._db.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {declaration}"
+                    )
 
     def recover(self, artifacts_root: Path) -> tuple[int, int]:
         """Fix up what a previous process left behind, at startup.
@@ -339,13 +436,19 @@ class Store:
         """Load every record. Called once, at construction."""
         if self._db is None:
             return
-        for row in self._db.execute(
-            "SELECT id, task, task_name, phase, examples, winner, report FROM systems"
-        ):
-            sid, task, task_name, phase, examples, winner, report = row
+        sql = """
+            SELECT id, task, task_name, phase, examples, winner, report,
+                   principal_id, definition
+            FROM systems
+        """
+        for row in self._db.execute(sql):
+            sid, task, task_name, phase = row[:4]
+            examples, winner, report, owner, definition = row[4:]
+            parsed_definition = json.loads(definition) if definition else None
             restored = tuple(
                 TaskExample(
-                    text=str(e["text"]), outcome=_outcome_in(task_name, e["outcome"])
+                    text=str(e["text"]),
+                    outcome=_outcome_in(task_name, e["outcome"], parsed_definition),
                 )
                 for e in json.loads(examples)
             )
@@ -358,20 +461,32 @@ class Store:
                     examples=restored,
                     winner=parsed,
                     report=report or "",
+                    principal_id=owner or "",
+                    definition=parsed_definition,
                 )
             elif phase == Phase.EVAL_APPROVED:
                 self._systems[sid] = ApprovedSystem(
-                    id=sid, task=task, task_name=task_name, examples=restored
+                    id=sid,
+                    task=task,
+                    task_name=task_name,
+                    examples=restored,
+                    principal_id=owner or "",
+                    definition=parsed_definition,
                 )
             else:
                 self._systems[sid] = DraftSystem(
-                    id=sid, task=task, task_name=task_name, examples=restored
+                    id=sid,
+                    task=task,
+                    task_name=task_name,
+                    examples=restored,
+                    principal_id=owner or "",
+                    definition=parsed_definition,
                 )
         for row in self._db.execute(
-            "SELECT id, system_id, status, quick, model, report, winner, error, seq "
-            "FROM runs ORDER BY seq"
+            "SELECT id, system_id, status, quick, model, report, winner, error, seq, "
+            "principal_id FROM runs ORDER BY seq"
         ):
-            rid, sid, status, quick, model, report, winner, error, seq = row
+            rid, sid, status, quick, model, report, winner, error, seq, owner = row
             self._runs[rid] = RunRecord(
                 id=rid,
                 system_id=sid,
@@ -381,6 +496,14 @@ class Store:
                 report=report,
                 winner=_trial_in(json.loads(winner)) if winner else None,
                 error=error,
+                principal_id=owner or "",
+            )
+            self._seq = max(self._seq, int(seq) + 1)
+        for sid, category, text, seq in self._db.execute(
+            "SELECT system_id, category, text, seq FROM safety_checks ORDER BY seq"
+        ):
+            self._safety_checks.setdefault(sid, {})[(category, text)] = SafetyCheck(
+                system_id=sid, category=category, text=text
             )
             self._seq = max(self._seq, int(seq) + 1)
 
@@ -397,8 +520,9 @@ class Store:
         with self._db:
             self._db.execute(
                 "INSERT OR REPLACE INTO systems "
-                "(id, task, task_name, phase, examples, winner, report) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(id, task, task_name, phase, examples, winner, report, principal_id, "
+                "definition) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     record.id,
                     record.task,
@@ -412,6 +536,8 @@ class Store:
                     ),
                     winner,
                     report,
+                    record.principal_id,
+                    json.dumps(record.definition) if record.definition else None,
                 ),
             )
 
@@ -422,8 +548,8 @@ class Store:
         with self._db:
             self._db.execute(
                 "INSERT OR REPLACE INTO runs "
-                "(id, system_id, status, quick, model, report, winner, error, seq) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(id, system_id, status, quick, model, report, winner, error, seq, "
+                "principal_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run.id,
                     run.system_id,
@@ -434,6 +560,7 @@ class Store:
                     json.dumps(_trial_out(run.winner)) if run.winner else None,
                     run.error,
                     self._seq,
+                    run.principal_id,
                 ),
             )
         self._seq += 1
@@ -446,51 +573,84 @@ class Store:
         task: str,
         examples: tuple[TaskExample, ...],
         task_name: str = "restaurant",
+        principal_id: str = "",
+        definition: dict[str, object] | None = None,
     ) -> DraftSystem:
-        """Insert a draft System."""
+        """Insert a draft System, owned by `principal_id`."""
         record = DraftSystem(
             id=f"sys_{uuid.uuid4().hex}",
             task=task,
             task_name=task_name,
             examples=examples,
+            principal_id=principal_id,
+            definition=definition,
         )
         self._systems[record.id] = record
         self._write_system(record)
         return record
 
-    def get_system(self, system_id: str) -> SystemRecord:
-        """Return a System or raise NotFoundError."""
+    def get_system(self, system_id: str, *, owner: str | None = None) -> SystemRecord:
+        """Return a System or raise NotFoundError.
+
+        `owner=None` means the caller is unfiltered (local, keyless mode) and sees
+        every System, including one written before ownership existed. A named owner
+        sees only its own rows, and another principal's id is answered with the same
+        NotFoundError an unknown id gets: a 403 would confirm the id exists, which
+        is the enumeration oracle this closes.
+        """
         record = self._systems.get(system_id)
-        if record is None:
+        if record is None or not _owned_by(record, owner):
             msg = f"system not found: {system_id}"
             raise NotFoundError(message=msg)
         return record
 
-    def list_systems(self) -> tuple[SystemRecord, ...]:
-        """Every System, newest last.
+    def list_systems(self, *, owner: str | None = None) -> tuple[SystemRecord, ...]:
+        """Every System the caller may see, newest last.
 
         The catalog cannot be built on an API that cannot enumerate its own Systems, so
         this is the floor under ranked listings, and it is also how a user finds what
         they built yesterday. Insertion order is preserved by the dict and by the run
         sequence, so the order is creation order.
         """
-        return tuple(self._systems.values())
+        return tuple(
+            record for record in self._systems.values() if _owned_by(record, owner)
+        )
 
-    def get_run(self, run_id: str) -> RunRecord:
-        """Return a run or raise NotFoundError."""
+    def get_run(self, run_id: str, *, owner: str | None = None) -> RunRecord:
+        """Return a run or raise NotFoundError. Owner-filtered like a System."""
         record = self._runs.get(run_id)
-        if record is None:
+        if record is None or not _owned_by(record, owner):
             msg = f"run not found: {run_id}"
             raise NotFoundError(message=msg)
         return record
 
-    def approve(self, system_id: str) -> SystemRecord:
+    def count_running(self, *, owner: str | None = None) -> int:
+        """Compiles in flight for an owner. The concurrent-compile quota reads this."""
+        return sum(
+            1
+            for run in self._runs.values()
+            if run.status is RunStatus.RUNNING and _owned_by(run, owner)
+        )
+
+    def approve(self, system_id: str, *, owner: str | None = None) -> SystemRecord:
         """Record eval approval. Idempotent."""
-        current = self.get_system(system_id)
+        current = self.get_system(system_id, owner=owner)
         match current:
-            case DraftSystem(id=sid, task=task, task_name=task_name, examples=examples):
+            case DraftSystem(
+                id=sid,
+                task=task,
+                task_name=task_name,
+                examples=examples,
+                principal_id=principal_id,
+                definition=definition,
+            ):
                 approved = ApprovedSystem(
-                    id=sid, task=task, task_name=task_name, examples=examples
+                    id=sid,
+                    task=task,
+                    task_name=task_name,
+                    examples=examples,
+                    principal_id=principal_id,
+                    definition=definition,
                 )
                 self._systems[sid] = approved
                 self._write_system(approved)
@@ -500,41 +660,60 @@ class Store:
             case _ as unreachable:
                 assert_never(unreachable)
 
-    def require_approved(self, system_id: str) -> ApprovedSystem | CompiledSystem:
+    def require_approved(
+        self, system_id: str, *, owner: str | None = None
+    ) -> ApprovedSystem | CompiledSystem:
         """Gate compile on eval approval."""
-        record = self.get_system(system_id)
+        record = self.get_system(system_id, owner=owner)
         if isinstance(record, DraftSystem):
             msg = "eval is not approved; POST /v1/systems/{id}/evals with approve=true"
             raise PhaseError(message=msg)
         return record
 
-    def require_compiled(self, system_id: str) -> CompiledSystem:
+    def require_compiled(
+        self, system_id: str, *, owner: str | None = None
+    ) -> CompiledSystem:
         """Gate invoke on a finished compile."""
-        record = self.get_system(system_id)
+        record = self.get_system(system_id, owner=owner)
         if isinstance(record, CompiledSystem):
             return record
         msg = "system is not compiled; POST /v1/systems/{id}/compile first"
         raise PhaseError(message=msg)
 
-    def latest_run(self, system_id: str) -> RunRecord | None:
+    def latest_run(
+        self, system_id: str, *, owner: str | None = None
+    ) -> RunRecord | None:
         """The most recent run for a System, or None if it has never compiled.
 
         Services order by insertion, which is creation order, so the last match is
         the newest.
         """
-        _ = self.get_system(system_id)
-        runs = [r for r in self._runs.values() if r.system_id == system_id]
+        _ = self.get_system(system_id, owner=owner)
+        runs = [
+            r
+            for r in self._runs.values()
+            if r.system_id == system_id and _owned_by(r, owner)
+        ]
         return runs[-1] if runs else None
 
-    def create_run(self, system_id: str, *, quick: bool, model: str = "") -> RunRecord:
+    def create_run(
+        self,
+        system_id: str,
+        *,
+        quick: bool,
+        model: str = "",
+        principal_id: str = "",
+        owner: str | None = None,
+    ) -> RunRecord:
         """Open a compile run. Eval must already be approved."""
-        _ = self.require_approved(system_id)
+        record = self.require_approved(system_id, owner=owner)
         run = RunRecord(
             id=f"run_{uuid.uuid4().hex}",
             system_id=system_id,
             status=RunStatus.RUNNING,
             quick=quick,
             model=model,
+            principal_id=principal_id or record.principal_id,
         )
         self._runs[run.id] = run
         self._write_run(run)
@@ -560,6 +739,12 @@ class Store:
             examples=current.examples,
             winner=report.winner,
             report=text,
+            # Ownership survives the phase change. Losing it here would hand the
+            # compiled System to nobody and make it unreachable in hosted mode.
+            principal_id=current.principal_id,
+            # The user's own fields and checks, kept with the compiled System: invoke
+            # rebuilds the gate from this, so a System is scored the way it was sold.
+            definition=current.definition,
         )
         self._systems[run.system_id] = compiled
         # Written on compile, not on deploy. A System that was compiled and never
@@ -576,3 +761,62 @@ class Store:
         self._runs[run_id] = failed
         self._write_run(failed)
         return failed
+
+    def add_safety_check(
+        self,
+        system_id: str,
+        *,
+        category: str,
+        text: str = "",
+        owner: str | None = None,
+    ) -> tuple[SafetyCheck, ...]:
+        """Add a check to a System's scan, and return every check it now has.
+
+        Returns the whole list rather than the new row, because the caller's next move
+        is to show what is now measured. Re-adding a check that is already there is a
+        no-op rather than an error: a person clicking the same suggestion twice wanted
+        the check, and a duplicate row would show up twice on the screen they are
+        reading.
+        """
+        _ = self.get_system(system_id, owner=owner)
+        check = SafetyCheck(system_id=system_id, category=category, text=text.strip())
+        existing = self._safety_checks.setdefault(system_id, {})
+        if (check.category, check.text) not in existing:
+            existing[(check.category, check.text)] = check
+            self._write_safety_check(check)
+        return self.safety_checks(system_id, owner=owner)
+
+    def safety_checks(
+        self, system_id: str, *, owner: str | None = None
+    ) -> tuple[SafetyCheck, ...]:
+        """Every check added to this System, in the order they were added."""
+        _ = self.get_system(system_id, owner=owner)
+        return tuple(self._safety_checks.get(system_id, {}).values())
+
+    def _write_safety_check(self, check: SafetyCheck) -> None:
+        """Write one added check through to the database."""
+        if self._db is None:
+            return
+        with self._db:
+            self._db.execute(
+                "INSERT OR IGNORE INTO safety_checks "
+                "(system_id, category, text, seq) VALUES (?, ?, ?, ?)",
+                (check.system_id, check.category, check.text, self._seq),
+            )
+        self._seq += 1
+
+
+def _owned_by(
+    record: SystemRecord | RunRecord,
+    owner: str | None,
+) -> bool:
+    """Whether `owner` may see this row.
+
+    `None` is the unfiltered scope: local mode, which has no principals, so nothing
+    is hidden. A named owner matches only its own rows, and an unowned row (written
+    before ownership existed) is visible to nobody but the unfiltered scope - which
+    is a hosted deployment's startup state, and the honest one: nothing claims it.
+    """
+    if owner is None:
+        return True
+    return record.principal_id == owner

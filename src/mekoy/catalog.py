@@ -4,7 +4,7 @@ A listing is not a System. It is a System *plus* the things a stranger needs bef
 trusting it: what it is for, what its base model is licensed under, where its data came
 from, and a score somebody other than its author can recompute.
 
-PLAN §24a is explicit that a badge is ours, never self-reported. That is why the only
+A badge is ours, never self-reported. That is why the only
 way into this catalog is through `review.listable` - there is no `add` that skips the
 gate, so a listing cannot exist without having passed it.
 
@@ -95,7 +95,7 @@ class Catalog:
         """Add a listing, but only one the review admits.
 
         There is deliberately no flag to bypass this. A catalog that can carry an
-        unreviewed System is a catalog that will, and PLAN says badges are ours.
+        unreviewed System is a catalog that will, and a badge is ours to give.
         """
         if not checked.listable:
             msg = (
@@ -141,7 +141,7 @@ class Catalog:
         return tuple(sorted(routable, key=lambda e: e.quality or 0.0, reverse=True))
 
     def withdraw(self, system_id: str) -> None:
-        """Remove a listing. PLAN §24a requires revoke to be possible."""
+        """Remove a listing. Revoke has to be possible."""
         if system_id not in self._by_id:
             msg = f"no listing for {system_id}"
             raise ListingError(message=msg)

@@ -1,6 +1,6 @@
 """Frozen receipt schema, numeric checks, and scoring.
 
-The second task class. Receipt extraction is the second prototype
+The second task class. Receipt extraction is the first prototype
 and deterministic numeric checks sit at the bottom of the eval stack:
 `qty * unit_price ≈ line_total`, `Σ line_total ≈ subtotal`, and
 `subtotal + tax ≈ total`. Those identities are why a receipt is the right first
@@ -221,7 +221,7 @@ def score_receipt(*, gold: Receipt, pred: Receipt) -> ReceiptScore:
 
     Header amounts compare with `EPSILON`, text fields casefold, and line items are
     matched one-to-one on amount with a fuzzy description, so reordering the lines
-    is not punished.
+    is not punished, because position is not the thing being measured.
     """
     header_hits = 0
     for field in TEXT_FIELDS:

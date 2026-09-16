@@ -280,11 +280,18 @@ def _value(outcome: object, name: str) -> object:
 
 
 def _missing(outcome: object, check: CheckSpec) -> tuple[str, ...]:
-    """Fields the definition requires that the answer left empty."""
+    """Fields the definition requires that the answer left empty.
+
+    Empty means absent, `None`, or an empty string. It does **not** mean falsy: an
+    answer of `booked=false` or `total=0` is a complete answer, and treating it as
+    missing meant a required check over a boolean rejected every honest "no" and
+    accepted only a claim that something happened. That is the opposite of what a safety
+    check is for.
+    """
     return tuple(
         f"{name}: {check.message or 'missing'}"
         for name in check.fields
-        if not _value(outcome, name)
+        if _value(outcome, name) is None or _value(outcome, name) == ""
     )
 
 
