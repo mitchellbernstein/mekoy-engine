@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: The private document by name, and the section marker that is its numbering.
 #: The marker has no other use in this codebase, so its presence is always a
 #: citation. It is spelled with an escape here so this file does not match itself.
-CITATION = re.compile(r"PLAN\.md|\u00a7")
+CITATION = re.compile(r"PLAN\.md|\u00a7|PLAN[\s_]+[0-9]")
 
 
 def _engine_sources() -> list[Path]:

@@ -20,7 +20,7 @@ from mekoy.bundle import spec_for, write_bundle
 from mekoy.catalog import Catalog, ListingError, Visibility
 from mekoy.compile import CompileReport
 from mekoy.orchestrator import Refusal, RouteDecision, Selectors, route
-from mekoy.review import Check, Decision, OptIn, review
+from mekoy.review import Check, Decision, OptIn, SafetyDecision, review
 from mekoy.spec import OwnershipFlags, Slos, SystemSpec, load_spec
 
 
@@ -44,6 +44,12 @@ def _opted_in() -> OptIn:
     return OptIn(consented=True, acknowledged_data_becomes_public=True)
 
 
+#: A clean scan, so a test about licences or attestation is not also testing safety.
+#: Safety has its own file; here it is the baseline the other checks sit on.
+def _scanned() -> SafetyDecision:
+    return SafetyDecision(scanned=True)
+
+
 def _bundle(tmp_path: Path) -> Path:
     """A directory standing in for a written bundle, which is what gets re-scored."""
     made = tmp_path / "bundle"
@@ -62,7 +68,9 @@ def test_an_unverifiable_score_refuses_publication() -> None:
     corpus is not shipped and no command re-scores a bundle. A catalog ranking Systems
     by such a number would assert evidence it does not have.
     """
-    checked = review(_spec(), opt_in=_opted_in(), score_is_recomputable=False)
+    checked = review(
+        _spec(), opt_in=_opted_in(), score_is_recomputable=False, safety=_scanned()
+    )
     assert checked.decision is Decision.REFUSED
     assert not checked.listable
 
@@ -78,14 +86,21 @@ def test_publication_needs_both_confirmations(tmp_path: Path) -> None:
         OptIn(acknowledged_data_becomes_public=True),
         OptIn(),
     ):
-        checked = review(_spec(), opt_in=opt_in, score_is_recomputable=True)
+        checked = review(
+            _spec(), opt_in=opt_in, score_is_recomputable=True, safety=_scanned()
+        )
         assert checked.decision is Decision.REFUSED
         assert any(f.check is Check.OPT_IN for f in checked.blockers)
 
 
 def test_a_missing_licence_is_refused(tmp_path: Path) -> None:
     """A listing without a licence cannot be routed to honestly."""
-    checked = review(_spec(license_=""), opt_in=_opted_in(), score_is_recomputable=True)
+    checked = review(
+        _spec(license_=""),
+        opt_in=_opted_in(),
+        score_is_recomputable=True,
+        safety=_scanned(),
+    )
     assert any(f.check is Check.LICENSE for f in checked.blockers)
 
 
@@ -96,6 +111,7 @@ def test_unattested_data_is_refused(tmp_path: Path) -> None:
         opt_in=_opted_in(),
         bundle_dir=_bundle(tmp_path),
         score_is_recomputable=True,
+        safety=_scanned(),
     )
     assert any(f.check is Check.ATTESTATION for f in checked.blockers)
 
@@ -107,6 +123,7 @@ def test_harness_tools_are_reported_rather_than_allowed(tmp_path: Path) -> None:
         opt_in=_opted_in(),
         bundle_dir=_bundle(tmp_path),
         score_is_recomputable=True,
+        safety=_scanned(),
     )
     assert clean.listable
 
@@ -116,6 +133,7 @@ def test_harness_tools_are_reported_rather_than_allowed(tmp_path: Path) -> None:
         bundle_dir=_bundle(tmp_path),
         score_is_recomputable=True,
         harness_tools=("http_get",),
+        safety=_scanned(),
     )
     assert not tainted.listable
     assert any(f.check is Check.HARNESS for f in tainted.blockers)
@@ -124,7 +142,10 @@ def test_harness_tools_are_reported_rather_than_allowed(tmp_path: Path) -> None:
 def test_every_blocker_is_named_in_the_explanation() -> None:
     """'Refused' without a reason is indistinguishable from a bug."""
     checked = review(
-        _spec(license_="", data=""), opt_in=OptIn(), score_is_recomputable=False
+        _spec(license_="", data=""),
+        opt_in=OptIn(),
+        score_is_recomputable=False,
+        safety=_scanned(),
     )
     said = checked.explain()
     assert said.startswith("refused:")
@@ -139,6 +160,7 @@ def test_a_fully_checkable_system_is_listable(tmp_path: Path) -> None:
         opt_in=_opted_in(),
         bundle_dir=_bundle(tmp_path),
         score_is_recomputable=True,
+        safety=_scanned(),
     )
     assert checked.listable
     assert checked.explain() == "listable: all review checks passed."
@@ -150,7 +172,9 @@ def test_a_fully_checkable_system_is_listable(tmp_path: Path) -> None:
 def test_the_catalog_refuses_an_unreviewed_system(tmp_path: Path) -> None:
     """There is no way in that skips the gate."""
     catalog = Catalog()
-    checked = review(_spec(), opt_in=_opted_in(), score_is_recomputable=False)
+    checked = review(
+        _spec(), opt_in=_opted_in(), score_is_recomputable=False, safety=_scanned()
+    )
     with pytest.raises(ListingError, match="refusing to publish"):
         _ = catalog.publish(
             "sys_x", _spec(), visible=Visibility.PUBLIC, checked=checked, quality=0.94
@@ -166,6 +190,7 @@ def test_publishing_and_withdrawing(tmp_path: Path) -> None:
         opt_in=_opted_in(),
         bundle_dir=_bundle(tmp_path),
         score_is_recomputable=True,
+        safety=_scanned(),
     )
     listing = catalog.publish(
         "sys_a", _spec(), visible=Visibility.PUBLIC, checked=checked, quality=0.94
@@ -187,6 +212,7 @@ def test_a_listing_without_a_recomputable_score_is_not_routable(tmp_path: Path) 
         opt_in=_opted_in(),
         bundle_dir=_bundle(tmp_path),
         score_is_recomputable=True,
+        safety=_scanned(),
     )
     _ = catalog.publish(
         "sys_unlisted",
@@ -223,6 +249,7 @@ def _catalog_with_public(
         opt_in=_opted_in(),
         bundle_dir=_bundle(tmp_path),
         score_is_recomputable=True,
+        safety=_scanned(),
     )
     for system_id, task_name, quality in specs:
         _ = catalog.publish(
@@ -323,6 +350,7 @@ def test_it_refuses_when_no_score_is_verifiable(tmp_path: Path) -> None:
         opt_in=_opted_in(),
         bundle_dir=_bundle(tmp_path),
         score_is_recomputable=True,
+        safety=_scanned(),
     )
     _ = catalog.publish(
         "sys_a",
@@ -482,6 +510,7 @@ def test_the_gate_opens_when_the_prerequisites_are_met(tmp_path: Path) -> None:
         opt_in=OptIn(consented=True, acknowledged_data_becomes_public=True),
         bundle_dir=bundle,
         score_is_recomputable=True,
+        safety=_scanned(),
     )
     assert checked.listable, checked.explain()
 

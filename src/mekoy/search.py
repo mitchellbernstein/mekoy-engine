@@ -95,7 +95,7 @@ class HarnessConfig:
     #: default.
     schema: bool = False
     #: Which base model to run. Empty means the completer the caller supplied.
-    #: PLAN 15.5 samples over three open models, and 41.9 names `model` first in
+    #: Sampling over several open models is worth doing, and `model` is named
     #: the controller's axes, so a search that cannot change the model is missing
     #: its largest lever.
     model: str = ""
